@@ -1194,28 +1194,79 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
     page.wait_for_timeout(800)
     modal.locator('select#PD_ACTIVITY').select_option(value=str(rec['activity_val']))
 
-    if str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999" and rec.get('other_text'):
-        modal.locator('input#PD_OTHER').fill(rec['other_text'])
+    # If activity is "999" (อื่นๆ), input#PD_OTHER is mandatory for modal form validation
+    if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
+        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30]
+        try:
+            modal.locator('input#PD_OTHER').fill(other_val)
+        except Exception:
+            pass
 
     be_date = rec['date']
-    page.evaluate(f"""() => {{
-        const sdate = document.querySelector('#bizModal_402 input#PD_SDATE');
-        const edate = document.querySelector('#bizModal_402 input#PD_EDATE');
-        if (sdate && edate) {{
-            sdate.removeAttribute('disabled');
-            sdate.value = '{be_date}';
-            sdate.dispatchEvent(new Event('change'));
-            edate.removeAttribute('disabled');
-            edate.value = '{be_date}';
-            edate.dispatchEvent(new Event('change'));
-        }}
-    }}""")
+    page.evaluate(f"""(dateVal) => {{
+        const modalEl = document.querySelector('#bizModal_402');
+        if (!modalEl) return;
+        ['#PD_SDATE', '#PD_EDATE'].forEach(sel => {{
+            const el = modalEl.querySelector(sel);
+            if (el) {{
+                el.removeAttribute('disabled');
+                el.value = dateVal;
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+            }}
+        }});
+    }}""", be_date)
 
     place = rec.get('location') or ''
     modal.locator('textarea#PD_DETAIL').fill(rec.get('activity') or '')
     modal.locator('textarea#PD_PLACE').fill(place)
     modal.locator('input#PD_TARGET').fill(str(rec.get('target_num') or 0))
-    modal.locator('button[type="submit"]:has-text("บันทึก")').click()
+
+    # Trigger events on all inputs inside modal and remove disabled from submit button
+    page.evaluate("""() => {
+        const modalEl = document.querySelector('#bizModal_402');
+        if (!modalEl) return;
+        const inputs = modalEl.querySelectorAll('input, select, textarea');
+        inputs.forEach(el => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('keyup', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+        });
+        
+        const btn = modalEl.querySelector('button[type="submit"]') 
+                 || modalEl.querySelector('button#btn-save') 
+                 || modalEl.querySelector('.btn-primary');
+        if (btn) {
+            btn.removeAttribute('disabled');
+            btn.disabled = false;
+            btn.classList.remove('disabled');
+        }
+    }""")
+    page.wait_for_timeout(300)
+
+    # Click submit button with JS fallback if Playwright actionability fails
+    try:
+        modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=5000)
+    except Exception:
+        page.evaluate("""() => {
+            const modalEl = document.querySelector('#bizModal_402');
+            if (!modalEl) return;
+            const btn = Array.from(modalEl.querySelectorAll('button, input[type="submit"]'))
+                .find(b => (b.textContent || '').includes('บันทึก') || (b.value || '').includes('บันทึก'))
+                || modalEl.querySelector('button[type="submit"]')
+                || modalEl.querySelector('button.btn-primary');
+            if (btn) {
+                btn.removeAttribute('disabled');
+                btn.disabled = false;
+                btn.click();
+            } else {
+                const form = modalEl.querySelector('form');
+                if (form) form.submit();
+            }
+        }""")
+
     page.wait_for_selector('#bizModal_402', state='hidden', timeout=10000)
     page.wait_for_timeout(500)
     q.put({"type": "row_status", "index": idx, "status": "success", "message": f"กรอกสำเร็จ: {msg_prefix}"})

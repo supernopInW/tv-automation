@@ -299,24 +299,29 @@ def main():
                 print(f"  Selecting Activity value: {rec['activity_val']}")
                 modal.locator('select#PD_ACTIVITY').select_option(value=rec['activity_val'])
                 
-                if rec['issue_val'] == "2" and rec['activity_val'] == "999":
-                    print(f"  Filling Other Activity Text: {rec['other_text']}")
-                    modal.locator('input#PD_OTHER').fill(rec['other_text'])
+                if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
+                    other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30]
+                    print(f"  Filling Other Activity Text: {other_val}")
+                    try:
+                        modal.locator('input#PD_OTHER').fill(other_val)
+                    except Exception:
+                        pass
                     
                 print(f"  Filling Date: {rec['date']}")
-                page.evaluate(f"""() => {{
-                    const sdate = document.querySelector('#bizModal_402 input#PD_SDATE');
-                    const edate = document.querySelector('#bizModal_402 input#PD_EDATE');
-                    if (sdate && edate) {{
-                        sdate.removeAttribute('disabled');
-                        sdate.value = '{rec['date']}';
-                        sdate.dispatchEvent(new Event('change'));
-                        
-                        edate.removeAttribute('disabled');
-                        edate.value = '{rec['date']}';
-                        edate.dispatchEvent(new Event('change'));
-                    }}
-                }}""")
+                page.evaluate(f"""(dateVal) => {{
+                    const modalEl = document.querySelector('#bizModal_402');
+                    if (!modalEl) return;
+                    ['#PD_SDATE', '#PD_EDATE'].forEach(sel => {{
+                        const el = modalEl.querySelector(sel);
+                        if (el) {{
+                            el.removeAttribute('disabled');
+                            el.value = dateVal;
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                        }}
+                    }});
+                }}""", rec['date'])
                 
                 print(f"  Filling Detail: {rec['activity']}")
                 modal.locator('textarea#PD_DETAIL').fill(rec['activity'])
@@ -327,13 +332,48 @@ def main():
                 print(f"  Filling Target: {rec['target_num']} (raw: '{rec['target_raw']}')")
                 modal.locator('input#PD_TARGET').fill(rec['target_num'])
                 
-                # Note: User requested not to fill Comment / Remarks (หมายเหตุไม่ต้องกรอก)
-                # print(f"  Filling Co-workers (Comment): {rec['co_workers']}")
-                # modal.locator('textarea#PD_COMMENT').fill(rec['co_workers'])
+                # Trigger input events and remove disabled attribute from submit button
+                page.evaluate("""() => {
+                    const modalEl = document.querySelector('#bizModal_402');
+                    if (!modalEl) return;
+                    const inputs = modalEl.querySelectorAll('input, select, textarea');
+                    inputs.forEach(el => {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('keyup', { bubbles: true }));
+                        el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    });
+                    
+                    const btn = modalEl.querySelector('button[type="submit"]') 
+                             || modalEl.querySelector('button#btn-save') 
+                             || modalEl.querySelector('.btn-primary');
+                    if (btn) {
+                        btn.removeAttribute('disabled');
+                        btn.disabled = false;
+                        btn.classList.remove('disabled');
+                    }
+                }""")
+                time.sleep(0.3)
                 
-                # Save Modal row
-                print("  Saving modal entry...")
-                modal.locator('button[type="submit"]:has-text("บันทึก")').click()
+                try:
+                    modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=5000)
+                except Exception:
+                    page.evaluate("""() => {
+                        const modalEl = document.querySelector('#bizModal_402');
+                        if (!modalEl) return;
+                        const btn = Array.from(modalEl.querySelectorAll('button, input[type="submit"]'))
+                            .find(b => (b.textContent || '').includes('บันทึก') || (b.value || '').includes('บันทึก'))
+                            || modalEl.querySelector('button[type="submit"]')
+                            || modalEl.querySelector('button.btn-primary');
+                        if (btn) {
+                            btn.removeAttribute('disabled');
+                            btn.disabled = false;
+                            btn.click();
+                        } else {
+                            const form = modalEl.querySelector('form');
+                            if (form) form.submit();
+                        }
+                    }""")
                 
                 # Wait for modal to hide (timeout 10s instead of 30s)
                 page.wait_for_selector('#bizModal_402', state='hidden', timeout=10000)

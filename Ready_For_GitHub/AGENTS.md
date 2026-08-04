@@ -171,6 +171,9 @@ python app.py
 - **ปุ่มสร้างแผนอัตโนมัติถูกล็อก (Disabled Button Behavior):**
   - ระบบเดิมล็อกปุ่มไว้จนกว่าจะกดปุ่ม "ยืนยันพื้นที่รับผิดชอบ"
   - ปรับปรุงล่าสุด: หากเลือกอำเภอและตำบลเรียบร้อยแล้ว ปุ่มสุ่มสร้างแผนจะเปิดให้กดทันที และจะทำ Auto-confirm พื้นที่ให้อัตโนมัติเมื่อกดใช้งาน
+- **ปุ่มบันทึกใน Modal `#bizModal_402` ค้าง (Timeout Exceeded / Element is not enabled):**
+  - เกิดขึ้นเมื่อกิจกรรมเป็นรหัส "999" (กิจกรรมอื่นๆ) แต่ช่อง `input#PD_OTHER` ไม่ได้ถูกกรอก หรือ T&V Form Validation script ค้าง attribute `disabled` บนปุ่มบันทึก
+  - **การแก้ไข:** ใน `_fill_record_row` (ของทั้ง `app.py` และ `automate_submission.py`) ได้เพิ่มการเติม fallback text ให้ `input#PD_OTHER` อัตโนมัติเมื่อเลือก 999, เพิ่มการ dispatch `input/change/blur/keyup` events ให้ครบทุก field, ปลดล็อก `disabled` บนปุ่มบันทึกด้วย JavaScript และเพิ่ม fallback JS click/submit กรณี Playwright standard click ติดขัด actionability check
 
 ---
 

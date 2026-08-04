@@ -6,13 +6,20 @@ echo     Target: https://github.com/supernopInW/tv-automation.git
 echo =======================================================
 echo.
 
-git init
-git add .
-git commit -m "Initial commit - DOAE T&V Automation System (Sida & Nationwide)"
-git branch -M main
-git remote remove origin >nul 2>&1
-git remote add origin https://github.com/supernopInW/tv-automation.git
-git push -u origin main --force
+set GIT_PATH="C:\Program Files\Git\cmd\git.exe"
+if exist %GIT_PATH% (
+    set GIT_CMD=%GIT_PATH%
+) else (
+    set GIT_CMD=git
+)
+
+%GIT_CMD% init
+%GIT_CMD% add .
+%GIT_CMD% commit -m "Initial commit - DOAE T&V Automation System (Sida & Nationwide)"
+%GIT_CMD% branch -M main
+%GIT_CMD% remote remove origin >nul 2>&1
+%GIT_CMD% remote add origin https://github.com/supernopInW/tv-automation.git
+%GIT_CMD% push -u origin main --force
 
 echo.
 echo =======================================================
