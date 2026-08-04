@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOAE T&V Automation Portal</title>
+    <!-- Google Fonts: Outfit (English / UI) and Sarabun (Thai readability) -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="/static/style.css?v=area3">
+</head>
+<body>
+
+<div class="container">
+    
+    <!-- HEADER BRANDING -->
+    <header>
+        <div class="brand">
+            <h1>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align: middle;">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#brand-grad)"/>
+                    <path d="M2 17L12 22L22 17" stroke="url(#brand-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 12L12 17L22 12" stroke="url(#brand-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs>
+                        <linearGradient id="brand-grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                            <stop stop-color="#8b5cf6"/>
+                            <stop offset="1" stop-color="#d946ef"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+                T&V Automation Center
+            </h1>
+            <p>ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานอัตโนมัติ (Workflow 26)</p>
+        </div>
+        <div class="header-right-group">
+            <button type="button" class="btn-manual" id="btn-open-manual">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                คู่มือการใช้งาน
+            </button>
+            <div class="pulse-status">
+                <span class="pulse-dot"></span>
+                <span>พร้อมให้บริการออนไลน์ทุกอำเภอ</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- พื้นที่รับผิดชอบ -->
+    <section class="glass-card" id="setup-section">
+        <span class="step-badge">พื้นที่รับผิดชอบ</span>
+        <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 0.5rem; color: var(--text-title);">
+            พื้นที่รับผิดชอบ
+        </h2>
+        <p class="geo-help">กำหนดก่อนอัปโหลดแผน · เจ้าหน้าที่เลือกตำบลที่รับผิดชอบ (1 หรือหลายตำบล) · ธุรการ/หัวหน้า = ทุกตำบลในอำเภอ</p>
+
+        <div class="form-grid geo-grid">
+            <div class="form-control-wrapper">
+                <label for="role-select">บทบาทผู้ใช้</label>
+                <select id="role-select" class="form-input" onchange="onRoleChange()">
+                    <option value="officer">เจ้าหน้าที่ประจำตำบล</option>
+                    <option value="district_chief">เกษตรอำเภอ / หัวหน้า (ทุกตำบล)</option>
+                    <option value="admin_clerk">ธุรการ (ไปกับหัวหน้า · ทุกตำบล)</option>
+                </select>
+                <span id="role-hint" class="field-hint">เลือก 1 หรือหลายตำบลที่รับผิดชอบ (เช่น 1 หรือ 2 ตำบล)</span>
+            </div>
+            <div class="form-control-wrapper">
+                <label for="officer-name">ชื่อเจ้าหน้าที่</label>
+                <input type="text" id="officer-name" class="form-input" placeholder="เช่น นายสมชาย ใจดี" autocomplete="name">
+            </div>
+            <div class="form-control-wrapper">
+                <label for="province-select">จังหวัด</label>
+                <select id="province-select" class="form-input" onchange="onProvincePicked()">
+                    <option value="">— เลือกจังหวัด —</option>
+                </select>
+                <datalist id="province-list" hidden></datalist>
+            </div>
+            <div class="form-control-wrapper">
+                <label for="amphoe-select">อำเภอ / เขต</label>
+                <select id="amphoe-select" class="form-input" onchange="onAmphoePicked()">
+                    <option value="">— เลือกอำเภอก่อน —</option>
+                </select>
+                <datalist id="amphoe-list" hidden></datalist>
+            </div>
+            <div class="form-control-wrapper">
+                <label for="office-name">ชื่อสำนักงาน (สนง.กษอ.)</label>
+                <input type="text" id="office-name" class="form-input" placeholder="เช่น สำนักงานเกษตรอำเภอเมือง...">
+                <span class="field-hint">ใช้เฉพาะวันประชุมสำนักงาน (วันจันทร์)</span>
+            </div>
+            <div class="form-control-wrapper">
+                <label for="office-staff-count">จำนวนสมาชิกสำนักงาน (คน)</label>
+                <input type="number" id="office-staff-count" class="form-input" min="1" max="99" value="7" placeholder="เช่น 7" onchange="onOfficeStaffCountChange()">
+                <span class="field-hint">จำนวนคนเป้าหมายสำหรับวันประชุมสำนักงาน (DM/WM)</span>
+            </div>
+        </div>
+
+        <div class="form-control-wrapper" id="tambon-multi-wrap" style="margin-top:1rem;">
+            <label>ตำบลที่รับผิดชอบ <span class="field-hint-inline">(หน่วยเล็กสุด = ตำบล · ติ๊กได้หลายตำบล)</span></label>
+            <div class="resp-tambon-box" id="tambon-multi">
+                <div class="resp-tambon-actions">
+                    <button type="button" class="btn-select-all-tambons" id="select-all-tambons-btn">เลือกทุกตำบลในอำเภอ</button>
+                    <button type="button" class="btn-select-all-tambons btn-clear-tambons" id="clear-tambons-btn">ล้าง</button>
+                </div>
+                <div class="resp-tambon-grid" id="tambon-multi-panel"></div>
+                <div class="chip-row" id="tambon-chips"></div>
+                <button type="button" class="multi-select-toggle form-input" id="tambon-multi-toggle" hidden aria-hidden="true"></button>
+            </div>
+            <input type="hidden" id="tambon" value="">
+            <datalist id="tambon-list"></datalist>
+        </div>
+
+        <div class="setup-summary" id="setup-summary">ยังไม่ได้ยืนยันพื้นที่รับผิดชอบ</div>
+        <div class="setup-actions">
+            <button type="button" class="btn-glow" id="confirm-setup-btn" onclick="confirmResponsibilitySetup()">
+                ยืนยันพื้นที่รับผิดชอบ แล้วไปอัปโหลด Excel
+            </button>
+        </div>
+
+        <!-- compatibility stubs (ไม่แสดง — ไม่ใช้หมู่บ้าน/หมู่ในพื้นที่รับผิดชอบ) -->
+        <div hidden aria-hidden="true">
+            <div class="multi-select" id="village-multi">
+                <button type="button" class="multi-select-toggle form-input" id="village-multi-toggle"></button>
+                <div class="multi-select-panel" id="village-multi-panel" hidden></div>
+                <div class="chip-row" id="village-chips"></div>
+                <input list="village-list" id="village-select" class="form-input">
+                <datalist id="village-list"></datalist>
+            </div>
+            <div class="multi-select" id="moo-multi">
+                <button type="button" class="multi-select-toggle form-input" id="moo-multi-toggle"></button>
+                <div class="multi-select-panel" id="moo-multi-panel" hidden></div>
+                <div class="chip-row" id="moo-chips"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- STEP 1: PLAN CREATION OPTIONS -->
+    <section class="glass-card" id="upload-section">
+        <span class="step-badge">Step 1</span>
+        <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 1.25rem; color: var(--text-title); display: flex; align-items: center; gap: 0.5rem;">
+            เลือกวิธีสร้างแผนงานประจำเดือน
+        </h2>
+
+        <!-- Segmented Tab Switcher -->
+        <div class="plan-mode-tabs" style="display: flex; gap: 0.5rem; background: rgba(15, 23, 42, 0.6); padding: 0.35rem; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 1.25rem;">
+            <button type="button" class="plan-tab-btn active" id="tab-btn-excel" onclick="switchPlanCreationTab('excel')" style="flex: 1; padding: 0.75rem 1rem; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; transition: var(--transition);">
+                📁 ทางเลือกที่ 1: อัปโหลดไฟล์ Excel
+            </button>
+            <button type="button" class="plan-tab-btn" id="tab-btn-auto" onclick="switchPlanCreationTab('auto')" style="flex: 1; padding: 0.75rem 1rem; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; transition: var(--transition);">
+                ✨ ทางเลือกที่ 2: สุ่มสร้างแผนอัตโนมัติบนเว็บ (กำหนดวันหยุดได้)
+            </button>
+        </div>
+        
+        <!-- PANEL 1: EXCEL UPLOAD -->
+        <div id="plan-panel-excel" class="plan-panel-content">
+            <div id="drop-zone" class="upload-zone" ondragover="event.preventDefault()" ondrop="handleDrop(event)" onclick="document.getElementById('file-input').click()">
+                <input type="file" id="file-input" style="display: none;" accept=".xls,.xlsx" onchange="handleFileSelect(event)">
+                <div class="upload-icon">📁</div>
+                <div class="upload-title" id="upload-placeholder">ลากไฟล์แผนเยี่ยมเยียนรายเดือนมาวาง หรือคลิกเลือกไฟล์ Excel</div>
+                <div class="upload-title" id="file-name-display" style="display: none; color: var(--success);"></div>
+                <div class="upload-subtitle">รองรับไฟล์ Excel (.xls, .xlsx) · จันทร์ = ประชุมสำนักงาน · วันอื่น = งานภาคสนาม</div>
+            </div>
+            
+            <div class="upload-options" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-top: 1rem;">
+                <label class="upload-opt-check" for="opt-random-moo-on-load">
+                    <input type="checkbox" id="opt-random-moo-on-load" checked>
+                    <span>
+                        <strong>สุ่มหมู่/ตำบลในสถานที่</strong> หลังวิเคราะห์ตาราง
+                    </span>
+                </label>
+                <button id="upload-btn" class="btn-glow" onclick="uploadExcelFile()" style="padding: 0.8rem 2rem;" disabled>
+                    📁 วิเคราะห์จาก Excel
+                </button>
+            </div>
+        </div>
+
+        <!-- PANEL 2: AUTO GENERATE ON WEB -->
+        <div id="plan-panel-auto" class="plan-panel-content" style="display: none; background: rgba(15, 23, 42, 0.4); padding: 1.25rem; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.06);">
+            <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+                <div class="form-control-wrapper">
+                    <label for="auto-plan-month">เลือกเดือนแผนงาน</label>
+                    <select id="auto-plan-month" class="form-input" onchange="renderHolidayDaysGrid()">
+                        <!-- Current & next months populated dynamically -->
+                    </select>
+                </div>
+
+                <div class="form-control-wrapper" style="grid-column: 1 / -1;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <label style="margin: 0; font-weight: 700; color: var(--text-title);">
+                            🏖️ กำหนดวันหยุดประจำเดือน (คลิกที่ปุ่มเลขวันที่เพื่อตั้งเป็นวันหยุด):
+                        </label>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button type="button" class="btn-holiday-quick" onclick="autoSelectThaiHolidays()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem; border-radius: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; cursor: pointer; font-weight: 600;">
+                                🇹🇭 โหลดวันหยุดนักขัตฤกษ์ไทย
+                            </button>
+                            <button type="button" class="btn-holiday-quick" onclick="clearSelectedHolidays()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem; border-radius: 8px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.12); color: var(--text-muted); cursor: pointer; font-weight: 600;">
+                                ล้างวันหยุด
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Day Buttons Grid (1 to 31) -->
+                    <div id="holiday-days-grid" class="holiday-days-grid">
+                        <!-- Rendered dynamically by JS -->
+                    </div>
+
+                    <span class="field-hint" id="holiday-selected-hint" style="margin-top: 0.5rem;">
+                        วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · คลิกที่ตัวเลขเพื่อเลือกวันหยุดนักขัตฤกษ์/วันหยุดพิเศษ/วันลาเพิ่มเติม
+                    </span>
+                </div>
+
+                <div class="form-control-wrapper" style="grid-column: 1 / -1;">
+                    <label>การสุ่มกิจกรรมและสถานที่</label>
+                    <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 0.25rem;">
+                        <label class="upload-opt-check" for="opt-randomize-activities">
+                            <input type="checkbox" id="opt-randomize-activities" checked>
+                            <span><strong>สุ่มกิจกรรมภาคสนามหลากหลาย</strong> (ศพก./แปลงใหญ่/Smart Farmer/วิสาหกิจ)</span>
+                        </label>
+                        <label class="upload-opt-check" for="opt-randomize-villages-auto">
+                            <input type="checkbox" id="opt-randomize-villages-auto" checked>
+                            <span><strong>สุ่มหมู่บ้านจริงในตำบล</strong> ที่คุณรับผิดชอบ</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end;">
+                <button id="btn-generate-auto-plan" class="btn-glow" onclick="generateAutoMonthPlanFromWebUI()" style="padding: 0.8rem 2.2rem; background: linear-gradient(135deg, #10b981, #059669);">
+                    ✨ สุ่มสร้างแผนประจำเดือนอัตโนมัติ
+                </button>
+            </div>
+        </div>
+
+        <p class="field-hint" id="upload-lock-hint" style="margin-top: 1rem;">กรุณายืนยันพื้นที่รับผิดชอบด้านบนก่อน</p>
+    </section>
+
+    <!-- STEP 2: CREDENTIALS & OPTIONS -->
+    <section class="glass-card">
+        <span class="step-badge">Step 2</span>
+        <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 1.5rem; color: var(--text-title);">
+            การตั้งค่าและบัญชีเข้าระบบ DOAE T&V
+        </h2>
+        
+        <div class="form-grid">
+            <div class="form-control-wrapper">
+                <label for="username">ชื่อผู้ใช้งาน (รหัสบัตรประชาชน)</label>
+                <input type="text" id="username" class="form-input" value="" placeholder="บัญชี T&V ของท่าน (เช่น เลขบัตรประชาชน)" autocomplete="username">
+                <span id="username-error" class="validation-msg"></span>
+                <span class="field-hint">ใช้บัญชีของท่านเอง — เก็บเฉพาะในเครื่อง (localStorage)</span>
+            </div>
+            
+            <div class="form-control-wrapper">
+                <label for="password">รหัสผ่านบัญชี T&V ของท่าน</label>
+                <input type="password" id="password" class="form-input" value="" placeholder="รหัสผ่านของท่านเอง (ไม่แชร์)" autocomplete="current-password">
+                <span id="password-error" class="validation-msg"></span>
+                <span class="field-hint">แต่ละคนใช้บัญชีของตนเอง — ระบบไม่เก็บรหัสผ่านถาวร</span>
+            </div>
+
+            <div class="form-control-wrapper">
+                <label for="gemini-api-key">Gemini API Key (สำหรับช่วยวิเคราะห์ตาราง)</label>
+                <input type="password" id="gemini-api-key" class="form-input" placeholder="AIzaSy...">
+            </div>
+            
+            <div class="form-control-wrapper">
+                <label for="sheet-select">แผ่นงาน (เดือนแผนงาน)</label>
+                <select id="sheet-select" class="form-input" onchange="onSheetChange()">
+                    <!-- Loaded dynamically -->
+                </select>
+            </div>
+            
+            <div class="form-control-wrapper">
+                <label for="approver">เจ้าหน้าที่ผู้อนุมัติ</label>
+                <input type="text" id="approver" class="form-input" value="" placeholder="พิมพ์ชื่อผู้อนุมัติ เช่น นายสมพงษ์ สุขสมบูรณ์">
+                <span id="approver-error" class="validation-msg"></span>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 2rem; padding-top: 1.5rem; flex-wrap: wrap; gap: 1.5rem;">
+            <div style="display: flex; gap: 2.5rem; flex-wrap: wrap;">
+                <label class="toggle-switch-wrapper">
+                    <input type="checkbox" id="headless" checked>
+                    <span class="toggle-btn"></span>
+                    <span>ซ่อนหน้าต่างเบราว์เซอร์อัตโนมัติ (Headless)</span>
+                </label>
+                
+                <div class="form-control-wrapper" style="flex-direction: row; align-items: center; gap: 1rem;">
+                    <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-right: 0.25rem;">โหมดทำงาน:</span>
+                    <div class="mode-segmented-control">
+                        <label class="mode-option">
+                            <input type="radio" name="run_mode" value="dry_run" checked>
+                            <span class="mode-label">
+                                🔍 Dry-run (ทดสอบ)
+                            </span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="run_mode" value="draft">
+                            <span class="mode-label">
+                                💾 บันทึกชั่วคราว
+                            </span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="run_mode" value="submit">
+                            <span class="mode-label">
+                                🚀 บันทึก & ส่งข้อมูล
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            
+            <button id="start-btn" class="btn-glow">
+                ⚡ เริ่มกรอกข้อมูลเข้าระบบ T&V
+            </button>
+        </div>
+    </section>
+
+    <!-- STEP 3: PREVIEW & VERIFY GRID -->
+    <section class="glass-card" style="padding: 1.5rem;">
+        <span class="step-badge">Step 3</span>
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem;">
+            <h2 style="font-size: 1.25rem; font-weight: 800; color: var(--text-title);">
+                ตารางสรุปแผนการกรอกข้อมูล (ตรวจทานความถูกต้องได้โดยตรง)
+            </h2>
+            <span id="row-count" style="font-size: 0.85rem; font-weight: 600; color: var(--primary);">กรุณาอัปโหลดไฟล์ Excel</span>
+            <div id="quick-stats" class="quick-stats"></div>
+            <div id="bulk-tambon-actions" class="bulk-tambon-actions multi-tambon-only">
+                <button type="button" class="btn-bulk-tambon" onclick="toggleAllRowsUseAllTambons(true)">ใช้ทุกตำบลกับทุกแถว</button>
+                <button type="button" class="btn-bulk-tambon btn-bulk-tambon-muted" onclick="toggleAllRowsUseAllTambons(false)">ยกเลิก</button>
+            </div>
+        </div>
+
+        <div class="progress-track">
+            <div id="progress-bar" class="progress-fill"></div>
+        </div>
+
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="text-center" style="width: 50px;">แถว</th>
+                        <th class="row-date-col">วันที่</th>
+                        <th class="row-issue-col">ประเด็นงาน (Issue)</th>
+                        <th class="row-activity-col">กิจกรรมหลัก (Activity)</th>
+                        <th class="row-details-col">รายละเอียดคำอธิบาย</th>
+                        <th class="row-location-col">สถานที่ (หมู่ + ตำบล)</th>
+                        <th class="row-target-col text-center">จำนวนคน</th>
+                        <th class="row-status-col text-center">สถานะ</th>
+                        <th class="row-action-col text-center">จัดการ</th>
+                    </tr>
+                </thead>
+                <tbody id="table-body">
+                    <!-- Loaded dynamically -->
+                </tbody>
+            </table>
+        </div>
+        <div style="display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; padding: 1.25rem 0 0.5rem 0;">
+            <button type="button" class="btn-add-row" onclick="addNewRow()">➕ เพิ่มแถวใหม่</button>
+            <button type="button" class="btn-add-row" onclick="generateMonthScheduleOnWeb()" style="background: rgba(139, 92, 246, 0.18); border-color: var(--primary);">📅 สร้างแผนทั้งเดือนอัตโนมัติ</button>
+            <button type="button" class="btn-add-row" onclick="exportPlanToExcel()" style="background: rgba(16, 185, 129, 0.18); border-color: var(--success);">📥 ส่งออกไฟล์ (CSV/Excel)</button>
+            <button type="button" class="btn-add-row" onclick="clearPlanTable()" style="background: rgba(239, 68, 68, 0.18); border-color: var(--error);">🗑️ ล้างตาราง</button>
+        </div>
+    </section>
+
+    <!-- STEP 4: MONITOR CONSOLE -->
+    <section class="terminal-container">
+        <div class="terminal-header">
+            <span>Terminal Realtime Stream logs</span>
+            <span id="log-status" style="color: var(--text-muted);">Idle</span>
+        </div>
+        <div id="console-logs" class="terminal-logs">
+            <div class="log-line">
+                <span class="log-timestamp">[00:00:00]</span>
+                <span class="entry-info">ระบบพร้อมทำงาน เริ่มต้นโดยการลากไฟล์ Excel มาอัปโหลดแล้วกดเริ่มรัน</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- SCREENSHOT BOX -->
+    <section id="error-container" class="screenshot-box">
+        <h3>
+            ⚠️ เกิดข้อผิดพลาดและบันทึกภาพหน้าจอล่าสุดไว้
+        </h3>
+        <img id="error-img" src="" alt="Error Screen Capture">
+    </section>
+
+    <!-- Confirmation Modal -->
+    <div id="confirm-overlay" class="modal-overlay">
+        <div class="confirm-modal">
+            <h3 id="confirm-title"></h3>
+            <p id="confirm-message"></p>
+            <div class="modal-actions">
+                <button id="confirm-no-btn" class="btn-cancel">ยกเลิก</button>
+                <button id="confirm-yes-btn" class="btn-confirm-danger">ยืนยันส่งข้อมูล</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Manual Modal -->
+    <div id="manual-modal" class="modal-overlay">
+        <div class="manual-modal-card">
+            <div class="manual-modal-header">
+                <div class="manual-title-wrapper">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                    <h3>คู่มือการใช้งานระบบ DOAE T&V Automation</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-manual-x">&times;</button>
+            </div>
+            <div class="manual-modal-body">
+                <div class="manual-intro">
+                    <p>ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานอัตโนมัติ (Workflow 26) ช่วยอ่านไฟล์แผนเยี่ยมเยียนประจำเดือนจาก Excel แล้วนำเข้าสู่ระบบ DOAE T&V ให้อัตโนมัติในไม่กี่วินาที</p>
+                </div>
+
+                <div class="manual-step-item">
+                    <div class="manual-step-num">1</div>
+                    <div class="manual-step-content">
+                        <h4>ขั้นที่ 1: ตั้งค่าพื้นที่รับผิดชอบ</h4>
+                        <p>เลือกจังหวัด/อำเภอ และติ๊กเลือกตำบลที่คุณรับผิดชอบ จากนั้นกดปุ่ม <strong>「ยืนยันพื้นที่รับผิดชอบ」</strong> (ต้องทำขั้นตอนนี้ก่อนเสมอ อัปโหลดจึงจะทำงานได้)</p>
+                    </div>
+                </div>
+
+                <div class="manual-step-item">
+                    <div class="manual-step-num">2</div>
+                    <div class="manual-step-content">
+                        <h4>ขั้นที่ 2: อัปโหลดไฟล์ Excel แผนงาน</h4>
+                        <p>เลือกไฟล์แผนเยี่ยมเยียนประจำเดือน (`.xlsx` / `.xls`) จากหัวหน้า แล้วกดปุ่ม <strong>「วิเคราะห์และโหลดตาราง」</strong></p>
+                    </div>
+                </div>
+
+                <div class="manual-step-item">
+                    <div class="manual-step-num">3</div>
+                    <div class="manual-step-content">
+                        <h4>ขั้นที่ 3: ตรวจทานข้อมูลตาราง</h4>
+                        <p>ระบบจะสุ่มสุ่มหมู่บ้านจริงในตำบลที่คุณเลือกให้อัตโนมัติ ส่วน <strong>วันจันทร์</strong> ระบบจะตั้งเป็นวันประชุมสำนักงาน (DM / WM) ให้อัตโนมัติเช่นกัน สามารถแก้ไขข้อความในตารางได้ตามต้องการ</p>
+                    </div>
+                </div>
+
+                <div class="manual-step-item">
+                    <div class="manual-step-num">4</div>
+                    <div class="manual-step-content">
+                        <h4>ขั้นที่ 4: ตั้งค่าบัญชี T&V และกดเริ่มกรอก</h4>
+                        <p>กรอก Username / Password บัญชี T&V ของคุณ เลือกผู้อนุมัติ เลือกโหมด (แนะนำ <strong>Dry-run</strong> ในครั้งแรกเพื่อทดสอบ) แล้วกด <strong>「เริ่มกรอกข้อมูลเข้าระบบ T&V」</strong></p>
+                    </div>
+                </div>
+
+                <div class="manual-faq-box">
+                    <h4>💡 ข้อควรรู้ & คำถามที่พบบ่อย</h4>
+                    <ul>
+                        <li>🔒 <strong>ความปลอดภัย:</strong> รหัสผ่าน T&V จะถูกเก็บชั่วคราวขณะใช้งานเท่านั้น เมื่อปิดเว็บรหัสผ่านจะหายทันที ไม่มีการบันทึกในเซิร์ฟเวอร์</li>
+                        <li>🌐 <strong>การทำงาน 24 ชม.:</strong> ระบบรันบน Cloud ออนไลน์ 24 ชม. สามารถปิดคอมพิวเตอร์ของคุณได้เลย</li>
+                        <li>😴 <strong>โหมดตื่นตัว (Hibernation):</strong> หากไม่มีคนเข้าใช้นานเกิน 15 นาที การเปิดเว็บครั้งแรกอาจใช้เวลาตื่นประมาณ 50 วินาที หลังจากนั้นจะทำงานได้ตามปกติ</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="manual-modal-footer">
+                <button type="button" class="btn-confirm-manual" id="btn-close-manual-ok">เข้าใจแล้ว / ปิดหน้าต่าง</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="app-footer">
+        DOAE T&V Automation v3.0 — รองรับทุกจังหวัด/อำเภอ/ตำบล/หมู่บ้าน
+        · <a href="/README.md" target="_blank" rel="noopener">README</a>
+        · <a href="/docs/USER_GUIDE.md" target="_blank" rel="noopener">คู่มือใช้งาน</a>
+        · <a href="/docs/DEPLOY.md" target="_blank" rel="noopener">คู่มือ Deploy</a>
+    </footer>
+
+</div>
+
+<script src="/static/app.js?v=area3"></script>
+
+</body>
+</html>

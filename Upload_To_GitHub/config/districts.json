@@ -1,0 +1,16 @@
+{
+  "presets": [
+    {
+      "id": "sida",
+      "label": "อำเภอสีดา (นครราชสีมา)",
+      "province_code": "30",
+      "province_name": "นครราชสีมา",
+      "amphoe_code": "3031",
+      "amphoe_name": "สีดา",
+      "office_name": "สำนักงานเกษตรอำเภอสีดา",
+      "default_tambon_code": "303105",
+      "default_tambon_name": "หนองตาดใหญ่",
+      "note": "ตำบลในอำเภอสีดา: สามเมือง, สีดา, หนองตาดใหญ่, โนนประดู่, โพนทอง"
+    }
+  ]
+}

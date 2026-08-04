@@ -1,0 +1,15 @@
+venv
+__pycache__
+*.pyc
+.git
+.gitignore
+uploads
+static/err_*.png
+static/error_screenshot.png
+*.xls
+*.xlsx
+.env
+.env.*
+scripts/_sample_village.json
+agent-transcripts
+.cursor

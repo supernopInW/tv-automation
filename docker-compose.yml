@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  tv-automation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tv_automation_app
+    ports:
+      - "7860:7860"
+    environment:
+      - PORT=7860
+      - HEADLESS=1
+      - FLASK_DEBUG=0
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/code/uploads
