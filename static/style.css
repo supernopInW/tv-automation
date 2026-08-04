@@ -1,3 +1,60 @@
+/* ===================================================
+   SEO ACCESSIBILITY: Skip Link & Breadcrumb Navigation
+   =================================================== */
+
+/* Skip to main content — visible only on keyboard focus */
+.skip-link {
+    position: absolute;
+    top: -100px;
+    left: 1rem;
+    z-index: 9999;
+    padding: 0.75rem 1.5rem;
+    background: var(--primary, #8b5cf6);
+    color: #fff;
+    font-weight: 700;
+    border-radius: 0 0 8px 8px;
+    text-decoration: none;
+    transition: top 0.2s ease;
+}
+.skip-link:focus {
+    top: 0;
+    outline: 3px solid #d946ef;
+    outline-offset: 2px;
+}
+
+/* Breadcrumb navigation */
+.breadcrumb-nav {
+    padding: 0.35rem 1.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted, #64748b);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    background: rgba(11,15,25,0.5);
+}
+.breadcrumb-list {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    flex-wrap: wrap;
+}
+.breadcrumb-list a {
+    color: var(--primary, #8b5cf6);
+    text-decoration: none;
+    transition: opacity 0.2s;
+}
+.breadcrumb-list a:hover { opacity: 0.8; }
+.breadcrumb-sep {
+    color: var(--text-muted, #64748b);
+    user-select: none;
+    font-size: 0.85rem;
+}
+
+/* ===================================================
+   ROOT VARIABLES & TOKENS
+   =================================================== */
+
 :root {
     --bg-color: #0b0f19;
     --glass-bg: rgba(17, 24, 39, 0.6);

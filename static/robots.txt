@@ -1,0 +1,22 @@
+User-agent: *
+Allow: /
+Allow: /docs/
+Allow: /static/
+Disallow: /uploads/
+Disallow: /api/
+Disallow: /__pycache__/
+
+# Sitemap location
+Sitemap: /sitemap.xml
+
+# Crawl delay (be respectful to server resources)
+Crawl-delay: 10
+
+# Allow specific bots
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 5
+
+User-agent: Bingbot
+Allow: /
+Crawl-delay: 10

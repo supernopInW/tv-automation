@@ -965,6 +965,16 @@ def serve_docs(filename):
 def serve_readme():
     return send_from_directory(BASE_DIR, 'README.md', mimetype='text/markdown')
 
+@app.route('/robots.txt')
+def serve_robots():
+    """Serve robots.txt for SEO crawlers."""
+    return send_from_directory(os.path.join(BASE_DIR, 'static'), 'robots.txt', mimetype='text/plain')
+
+@app.route('/sitemap.xml')
+def serve_sitemap():
+    """Serve XML sitemap for SEO indexing."""
+    return send_from_directory(os.path.join(BASE_DIR, 'static'), 'sitemap.xml', mimetype='application/xml')
+
 @app.route('/api/health')
 def health_check():
     meta = geo_data.load_meta()

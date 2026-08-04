@@ -1,83 +1,215 @@
 <!DOCTYPE html>
-<html lang="th">
+<html lang="th" prefix="og: https://ogp.me/ns#">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DOAE T&V Automation Portal - ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ (Workflow 26)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
 
-    <!-- SEO & Primary Metadata -->
-    <meta name="description" content="ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ (DOAE T&V Automation System - Workflow 26) สำหรับเจ้าหน้าที่สำนักงานเกษตรอำเภอ กรมส่งเสริมการเกษตร พัฒนาโดย นายนพฤทธิ์ น้อยเล็น">
-    <meta name="keywords" content="DOAE, T&V, ระบบกรอกแผนเยี่ยมเยียน, กรมส่งเสริมการเกษตร, แผนเยี่ยมเยียนอัตโนมัติ, Workflow 26, เกษตรอำเภอ, นพฤทธิ์ น้อยเล็น, สำนักงานเกษตรอำเภอ">
-    <meta name="author" content="นายนพฤทธิ์ น้อยเล็น (นักวิชาการส่งเสริมการเกษตรปฏิบัติการ)">
-    <meta name="robots" content="index, follow">
-    <meta name="theme-color" content="#0f172a">
+    <!-- ===== PRIMARY SEO ===== -->
+    <title>DOAE T&V Automation Portal | ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ Workflow 26 กรมส่งเสริมการเกษตร</title>
+    <meta name="description" content="ระบบอัตโนมัติสำหรับเจ้าหน้าที่สำนักงานเกษตรอำเภอ ช่วยนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือน (Workflow 26) ลงระบบ T&V Portal กรมส่งเสริมการเกษตร รองรับทุกจังหวัด อำเภอ ตำบล ทั่วประเทศไทย">
+    <meta name="keywords" content="DOAE T&V, ระบบกรอกแผนเยี่ยมเยียน, กรมส่งเสริมการเกษตร, สำนักงานเกษตรอำเภอ, Workflow 26, tandv.doae.go.th, แผนเยี่ยมเยียนอัตโนมัติ, เกษตรอำเภอ, นักวิชาการส่งเสริมการเกษตร, ส่งเสริมการเกษตร, นพฤทธิ์ น้อยเล็น, กษอ, ตำบล หมู่บ้าน">
+    <meta name="author" content="นายนพฤทธิ์ น้อยเล็น | นักวิชาการส่งเสริมการเกษตรปฏิบัติการ | สำนักงานเกษตรอำเภอสีดา จ.นครราชสีมา">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="rating" content="general">
+    <meta name="revisit-after" content="7 days">
+    <meta name="language" content="Thai">
+    <meta name="geo.region" content="TH">
+    <meta name="geo.country" content="Thailand">
+    <meta name="classification" content="Government, Agriculture, Technology">
+    <meta name="category" content="Web Application">
+    <meta name="coverage" content="Worldwide">
+    <meta name="distribution" content="Global">
 
-    <!-- Preconnect & Performance Optimization -->
+    <!-- ===== CANONICAL & HREFLANG ===== -->
+    <link rel="canonical" href="/">
+    <link rel="alternate" hreflang="th" href="/">
+    <link rel="alternate" hreflang="x-default" href="/">
+
+    <!-- ===== PERFORMANCE PRECONNECT ===== -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="dns-prefetch" href="https://fonts.googleapis.com">
     <link rel="dns-prefetch" href="https://tandv.doae.go.th">
+    <link rel="dns-prefetch" href="https://www.doae.go.th">
 
-    <!-- Open Graph / Facebook / LINE -->
+    <!-- ===== FAVICON & ICONS ===== -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%230f172a%22/><text y=%221em%22 font-size=%2260%22 x=%2250%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 dy=%220.1em%22>🌾</text></svg>">
+    <link rel="shortcut icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%238b5cf6%22/><text y=%221em%22 font-size=%2260%22 x=%2250%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 dy=%220.1em%22>🌾</text></svg>">
+    <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="msapplication-TileColor" content="#8b5cf6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="T&V Auto">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="application-name" content="T&V Automation Portal">
+
+    <!-- ===== OPEN GRAPH (Facebook / LINE / Messenger) ===== -->
     <meta property="og:type" content="website">
-    <meta property="og:title" content="DOAE T&V Automation Center - ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ">
-    <meta property="og:description" content="ช่วยเจ้าหน้าที่สำนักงานเกษตรอำเภอนำเข้าข้อมูลและกรอกแผนเยี่ยมเยียนรายเดือนลงระบบ T&V Portal (Workflow 26) โดยอัตโนมัติ รวดเร็ว ถูกต้อง แม่นยำ">
+    <meta property="og:url" content="/">
+    <meta property="og:title" content="T&V Automation Center | ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ กรมส่งเสริมการเกษตร">
+    <meta property="og:description" content="ช่วยเจ้าหน้าที่สำนักงานเกษตรอำเภอนำเข้าข้อมูลและกรอกแผนเยี่ยมเยียนรายเดือนลงระบบ T&V Portal (Workflow 26) โดยอัตโนมัติ รวดเร็ว ถูกต้อง แม่นยำ รองรับทุกอำเภอทั่วประเทศไทย">
     <meta property="og:site_name" content="DOAE T&V Automation Portal">
     <meta property="og:locale" content="th_TH">
+    <meta property="og:locale:alternate" content="en_US">
+    <meta property="article:author" content="นายนพฤทธิ์ น้อยเล็น">
+    <meta property="article:section" content="เทคโนโลยีการเกษตร">
+    <meta property="article:tag" content="กรมส่งเสริมการเกษตร, T&V, Automation">
 
-    <!-- Twitter Card Metadata -->
+    <!-- ===== TWITTER / X CARD ===== -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="DOAE T&V Automation Center">
-    <meta name="twitter:description" content="ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ (Workflow 26) กรมส่งเสริมการเกษตร">
+    <meta name="twitter:site" content="@DoaeOfficial">
+    <meta name="twitter:title" content="DOAE T&V Automation Center | ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ">
+    <meta name="twitter:description" content="ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ (Workflow 26) กรมส่งเสริมการเกษตร พัฒนาโดย นายนพฤทธิ์ น้อยเล็น">
+    <meta name="twitter:creator" content="@noprit_noilen">
 
-    <!-- Embedded SVG Favicon -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%238b5cf6%22><path d=%22M12 2L2 7L12 12L22 7L12 2Z%22/><path d=%22M2 17L12 22L22 17%22 stroke=%22%23d946ef%22 stroke-width=%222%22/><path d=%22M2 12L12 17L22 12%22 stroke=%22%238b5cf6%22 stroke-width=%222%22/></svg>">
-
-    <!-- Google Fonts: Outfit (English / UI) and Sarabun (Thai readability) -->
+    <!-- ===== GOOGLE FONTS (preloaded for performance) ===== -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Sarabun:wght@300;400;500;600;700&display=swap">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+
+    <!-- ===== MAIN STYLESHEET ===== -->
+    <link rel="preload" as="style" href="/static/style.css?v=area3">
     <link rel="stylesheet" href="/static/style.css?v=area3">
 
-    <!-- JSON-LD Structured Data (Schema.org) -->
+    <!-- ===== SCHEMA.ORG STRUCTURED DATA (JSON-LD) ===== -->
     <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "DOAE T&V Automation Portal",
-      "alternateName": "ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V Workflow 26",
-      "operatingSystem": "Web Browser",
-      "applicationCategory": "BusinessApplication",
-      "description": "ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ สำหรับเจ้าหน้าที่สำนักงานเกษตรอำเภอ กรมส่งเสริมการเกษตร (Workflow 26)",
-      "url": "https://tandv.doae.go.th",
-      "author": {
-        "@type": "Person",
-        "name": "นายนพฤทธิ์ น้อยเล็น",
-        "jobTitle": "นักวิชาการส่งเสริมการเกษตรปฏิบัติการ",
-        "affiliation": {
-          "@type": "Organization",
-          "name": "สำนักงานเกษตรอำเภอสีดา กรมส่งเสริมการเกษตร"
+    [
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "@id": "/#website",
+        "name": "DOAE T&V Automation Portal",
+        "url": "/",
+        "description": "ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ สำหรับเจ้าหน้าที่สำนักงานเกษตรอำเภอ กรมส่งเสริมการเกษตร",
+        "inLanguage": "th",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "/?q={search_term_string}",
+          "query-input": "required name=search_term_string"
         }
       },
-      "publisher": {
-        "@type": "Organization",
-        "name": "กรมส่งเสริมการเกษตร (DOAE)",
-        "url": "https://www.doae.go.th"
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "@id": "/#app",
+        "name": "DOAE T&V Automation Portal",
+        "alternateName": ["ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V", "T&V Automation System Workflow 26"],
+        "url": "/",
+        "operatingSystem": "Web Browser (Chrome, Firefox, Edge, Safari)",
+        "applicationCategory": "BusinessApplication",
+        "applicationSubCategory": "GovernmentApplication",
+        "featureList": [
+          "นำเข้าข้อมูลแผนเยี่ยมเยียนจาก Excel อัตโนมัติ",
+          "รองรับทุกจังหวัด อำเภอ ตำบล ทั่วประเทศไทย",
+          "Playwright Browser Automation (Workflow 26)",
+          "โหมด Dry-run / บันทึกชั่วคราว / บันทึกและส่ง",
+          "AI-Assisted Analysis ด้วย Gemini"
+        ],
+        "description": "ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ สำหรับเจ้าหน้าที่สำนักงานเกษตรอำเภอ กรมส่งเสริมการเกษตร",
+        "softwareVersion": "3.0",
+        "datePublished": "2024-01-01",
+        "dateModified": "2026-08-04",
+        "inLanguage": "th",
+        "isAccessibleForFree": true,
+        "author": {
+          "@type": "Person",
+          "@id": "/#author",
+          "name": "นายนพฤทธิ์ น้อยเล็น",
+          "givenName": "นพฤทธิ์",
+          "familyName": "น้อยเล็น",
+          "jobTitle": "นักวิชาการส่งเสริมการเกษตรปฏิบัติการ",
+          "affiliation": {
+            "@type": "GovernmentOrganization",
+            "name": "สำนักงานเกษตรอำเภอสีดา",
+            "department": "กรมส่งเสริมการเกษตร",
+            "address": {
+              "@type": "PostalAddress",
+              "addressLocality": "สีดา",
+              "addressRegion": "นครราชสีมา",
+              "addressCountry": "TH"
+            }
+          }
+        },
+        "publisher": {
+          "@type": "GovernmentOrganization",
+          "@id": "/#publisher",
+          "name": "กรมส่งเสริมการเกษตร (DOAE)",
+          "alternateName": "Department of Agricultural Extension",
+          "url": "https://www.doae.go.th",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://www.doae.go.th/wp-content/uploads/2021/11/logo-doae.png"
+          }
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "THB",
+          "availability": "https://schema.org/InStock"
+        }
       },
-      "inLanguage": "th",
-      "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "THB"
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "หน้าหลัก",
+            "item": "/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ Workflow 26",
+            "item": "/#setup-section"
+          }
+        ]
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "ระบบ T&V Automation ใช้งานอย่างไร?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "อัปโหลดไฟล์ Excel แผนเยี่ยมเยียนรายเดือน กรอกข้อมูลบัญชี T&V ของท่าน จากนั้นกดปุ่มสั่งให้บอทกรอกข้อมูลลงระบบ T&V Portal (Workflow 26) โดยอัตโนมัติ"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "รองรับอำเภอไหนบ้าง?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "รองรับทุกจังหวัด ทุกอำเภอ ทุกตำบล ทั่วประเทศไทย ไม่จำกัดเฉพาะอำเภอสีดา"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "รหัสผ่าน T&V ปลอดภัยไหม?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "ระบบไม่เก็บรหัสผ่านถาวร รหัสผ่านถือครองอยู่ในเซสชันเบราว์เซอร์ของท่านเท่านั้น ไม่มีการส่งหรือบันทึกไปที่ใดทั้งสิ้น"
+            }
+          }
+        ]
       }
-    }
+    ]
     </script>
 </head>
 <body>
+<!-- Skip to main content (Accessibility + SEO) -->
+<a href="#main-content" class="skip-link" aria-label="ข้ามไปยังเนื้อหาหลัก">ข้ามไปยังเนื้อหาหลัก</a>
 
-<div class="container">
+<div class="container" role="document" itemscope itemtype="https://schema.org/WebPage">
     
     <!-- HEADER BRANDING -->
-    <header>
+    <header role="banner" aria-label="ส่วนหัวระบบ T&V Automation" itemscope itemtype="https://schema.org/WPHeader">
         <div class="brand">
             <h1>
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align: middle;">
@@ -91,9 +223,9 @@
                         </linearGradient>
                     </defs>
                 </svg>
-                T&V Automation Center
+                <span itemprop="name">T&V Automation Center</span>
             </h1>
-            <p>ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานอัตโนมัติ (Workflow 26)</p>
+            <p itemprop="description">ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนอัตโนมัติ (Workflow 26) | กรมส่งเสริมการเกษตร</p>
             <div class="developer-credit-top">
                 <span class="credit-icon">👨‍🌾</span>
                 <span>พัฒนาโดย: <strong>นายนพฤทธิ์ น้อยเล็น</strong> (นักวิชาการส่งเสริมการเกษตรปฏิบัติการ)</span>
@@ -115,11 +247,29 @@
         </div>
     </header>
 
+    <!-- Breadcrumb Navigation (SEO + Accessibility) -->
+    <nav aria-label="เส้นทางปัจจุบัน (Breadcrumb)" class="breadcrumb-nav" role="navigation">
+        <ol class="breadcrumb-list" itemscope itemtype="https://schema.org/BreadcrumbList">
+            <li itemprop="itemListElement" itemscope itemtype="https://schema.org/ListItem">
+                <a href="/" itemprop="item" aria-label="หน้าหลัก"><span itemprop="name">🏠 หน้าหลัก</span></a>
+                <meta itemprop="position" content="1">
+            </li>
+            <li class="breadcrumb-sep" aria-hidden="true">›</li>
+            <li itemprop="itemListElement" itemscope itemtype="https://schema.org/ListItem">
+                <span itemprop="name" aria-current="page">ระบบกรอกแผนเยี่ยมเยียน Workflow 26</span>
+                <meta itemprop="position" content="2">
+            </li>
+        </ol>
+    </nav>
+
+    <!-- Main Content -->
+    <main id="main-content" role="main" aria-label="ระบบกรอกแผนปฏิบัติงานเยี่ยมเยียนอัตโนมัติ">
+
     <!-- พื้นที่รับผิดชอบ -->
-    <section class="glass-card" id="setup-section">
+    <section class="glass-card" id="setup-section" aria-labelledby="setup-heading" itemscope itemtype="https://schema.org/HowToStep">
         <span class="step-badge">พื้นที่รับผิดชอบ</span>
-        <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 0.5rem; color: var(--text-title);">
-            พื้นที่รับผิดชอบ
+        <h2 id="setup-heading" style="font-size: 1.25rem; font-weight: 800; margin-bottom: 0.5rem; color: var(--text-title);" itemprop="name">
+            ขั้นที่ 1: กำหนดพื้นที่รับผิดชอบ
         </h2>
         <p class="geo-help">กำหนดก่อนอัปโหลดแผน · เจ้าหน้าที่เลือกตำบลที่รับผิดชอบ (1 หรือหลายตำบล) · ธุรการ/หัวหน้า = ทุกตำบลในอำเภอ</p>
 
@@ -528,22 +678,35 @@
             </div>
         </div>
     </div>
+    </main><!-- /main#main-content -->
 
-    <footer class="app-footer">
+    <footer class="app-footer" role="contentinfo" aria-label="ข้อมูลระบบและผู้พัฒนา" itemscope itemtype="https://schema.org/WPFooter">
         <div class="footer-credit-box">
-            <div class="footer-dev-name">
-                👨‍🌾 ออกแบบและพัฒนาโดย: <strong>นายนพฤทธิ์ น้อยเล็น</strong> (นักวิชาการส่งเสริมการเกษตรปฏิบัติการ)
-            </div>
-            <div class="footer-sub-meta">
-                DOAE T&V Automation System v3.0 — รองรับทุกจังหวัด/อำเภอ/ตำบล/หมู่บ้าน
-                · <a href="/README.md" target="_blank" rel="noopener">README</a>
-                · <a href="/docs/USER_GUIDE.md" target="_blank" rel="noopener">คู่มือใช้งาน</a>
-                · <a href="/docs/DEPLOY.md" target="_blank" rel="noopener">คู่มือ Deploy</a>
-            </div>
+            <address class="footer-dev-name" itemprop="author" itemscope itemtype="https://schema.org/Person" style="font-style:normal;">
+                <span aria-hidden="true">👨‍🌾</span>
+                ออกแบบและพัฒนาโดย:
+                <strong itemprop="name"><a href="#" itemprop="url" rel="author" style="color:inherit;text-decoration:none;">นายนพฤทธิ์ น้อยเล็น</a></strong>
+                (<span itemprop="jobTitle">นักวิชาการส่งเสริมการเกษตรปฏิบัติการ</span>)
+                <span itemprop="affiliation" itemscope itemtype="https://schema.org/GovernmentOrganization">
+                    — <span itemprop="name">สำนักงานเกษตรอำเภอสีดา</span>
+                    <span itemprop="parentOrganization" itemscope itemtype="https://schema.org/Organization">
+                        <span itemprop="name" hidden>กรมส่งเสริมการเกษตร</span>
+                    </span>
+                </span>
+            </address>
+            <nav class="footer-sub-meta" aria-label="ลิงก์เอกสารและข้อมูลระบบ">
+                <span itemprop="version" hidden>3.0</span>
+                DOAE T&amp;V Automation System <abbr title="version">v</abbr>3.0
+                <span aria-hidden="true">—</span> รองรับทุกจังหวัด/อำเภอ/ตำบล/หมู่บ้านทั่วไทย
+                · <a href="/README.md" target="_blank" rel="noopener noreferrer" aria-label="อ่าน README ของโปรเจกต์">README</a>
+                · <a href="/docs/USER_GUIDE.md" target="_blank" rel="noopener noreferrer" aria-label="คู่มือการใช้งานสำหรับเจ้าหน้าที่">คู่มือใช้งาน</a>
+                · <a href="/docs/DEPLOY.md" target="_blank" rel="noopener noreferrer" aria-label="คู่มือการติดตั้งระบบ">คู่มือ Deploy</a>
+                · <a href="https://github.com/supernopInW/tv-automation" target="_blank" rel="noopener noreferrer me" aria-label="ดูซอร์สโค้ดบน GitHub">GitHub</a>
+            </nav>
         </div>
     </footer>
 
-</div>
+</div><!-- /div.container -->
 
 <script src="/static/app.js?v=area3"></script>
 
