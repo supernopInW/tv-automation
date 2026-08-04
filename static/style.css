@@ -131,6 +131,24 @@ header {
     font-weight: 500;
 }
 
+.developer-credit-top {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+    padding: 0.3rem 0.85rem;
+    background: rgba(139, 92, 246, 0.12);
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    border-radius: 20px;
+    font-size: 0.85rem;
+    color: #e2e8f0;
+}
+
+.developer-credit-top strong {
+    color: #f472b6;
+    font-weight: 700;
+}
+
 .pulse-status {
     display: flex;
     align-items: center;
@@ -1892,4 +1910,47 @@ body:not(.role-multi-tambon) .multi-tambon-only {
 
 .day-chip-btn.is-holiday .day-name {
     color: #fef2f2 !important;
+}
+
+/* Footer Developer Credit */
+.app-footer {
+    text-align: center;
+    padding: 2rem 1rem;
+    margin-top: 3.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-muted);
+}
+
+.footer-credit-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.footer-dev-name {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.footer-dev-name strong {
+    color: #f472b6;
+    font-weight: 800;
+}
+
+.footer-sub-meta {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.footer-sub-meta a {
+    color: #a78bfa;
+    text-decoration: none;
+    transition: var(--transition);
+}
+
+.footer-sub-meta a:hover {
+    color: #f472b6;
+    text-decoration: underline;
 }
