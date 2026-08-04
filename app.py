@@ -1300,24 +1300,33 @@ def _finish_plan(page, mode, q):
     if mode == 'draft':
         q.put({"type": "info", "message": "กำลังกดปุ่มบันทึกชั่วคราว (Save Draft)..."})
         page.click('#wf-btn-temp-save')
-        q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกชั่วคราว..."})
-        page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-        page.click('button.confirm')
-        page.wait_for_timeout(1000)
-        page.evaluate("document.querySelector('#form_wf').submit()")
+        try:
+            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
+            q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกชั่วคราว..."})
+            page.click('button.confirm')
+            page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        page.evaluate("""() => {
+            const form = document.querySelector('#form_wf') || document.querySelector('form');
+            if (form) form.submit();
+        }""")
         page.wait_for_timeout(5000)
         q.put({"type": "info", "message": "บันทึกข้อมูลแบบชั่วคราว (ร่าง) เรียบร้อยแล้ว!"})
     else:
         q.put({"type": "info", "message": "กำลังกดปุ่มบันทึกและส่งแผน..."})
         page.click('#wf-btn-save')
         try:
-            page.wait_for_selector('button.confirm', state='visible', timeout=3000)
+            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
             q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกและส่งแผน..."})
             page.click('button.confirm')
             page.wait_for_timeout(1000)
         except Exception:
             pass
-        page.evaluate("document.querySelector('#form_wf').submit()")
+        page.evaluate("""() => {
+            const form = document.querySelector('#form_wf') || document.querySelector('form');
+            if (form) form.submit();
+        }""")
         page.wait_for_timeout(5000)
         q.put({"type": "info", "message": "บันทึกและส่งข้อมูลเรียบร้อยแล้ว!"})
 

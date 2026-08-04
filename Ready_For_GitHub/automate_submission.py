@@ -410,19 +410,28 @@ def main():
             except Exception:
                 pass
             # Force native submit to bypass JQuery submit bugs
-            page.evaluate("document.querySelector('#form_wf').submit()")
+            page.evaluate("""() => {
+                const form = document.querySelector('#form_wf') || document.querySelector('form');
+                if (form) form.submit();
+            }""")
             print("Form submitted. Waiting 5 seconds for redirection...")
             time.sleep(5)
             print("Submission complete!")
         elif args.draft:
             print("\n*** SAVING PLANS AS DRAFT (บันทึกชั่วคราว) ***")
             page.click('#wf-btn-temp-save')
-            print("Waiting for confirmation dialog...")
-            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-            page.click('button.confirm')
-            time.sleep(1.0)
+            try:
+                print("Waiting for confirmation dialog...")
+                page.wait_for_selector('button.confirm', state='visible', timeout=5000)
+                page.click('button.confirm')
+                time.sleep(1.0)
+            except Exception:
+                pass
             # Force native submit to bypass JQuery submit bugs
-            page.evaluate("document.querySelector('#form_wf').submit()")
+            page.evaluate("""() => {
+                const form = document.querySelector('#form_wf') || document.querySelector('form');
+                if (form) form.submit();
+            }""")
             print("Draft saved. Waiting 5 seconds for redirection...")
             time.sleep(5)
             print("Draft save complete!")
