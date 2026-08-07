@@ -172,7 +172,10 @@ def _select_modal_option(page, selector, value, label=""):
 
 
 def _set_modal_dates(page, date_value):
-    """Set both portal date fields and verify values after dynamic callbacks run."""
+    """Set identical start/end dates for a one-day plan record."""
+    same_day = str(date_value or "").strip()
+    if not same_day:
+        raise ValueError("A plan record must contain a date")
     last_values = {}
     for _ in range(4):
         last_values = page.evaluate(
@@ -192,11 +195,11 @@ def _set_modal_dates(page, date_value):
                 });
                 return values;
             }""",
-            date_value,
+            same_day,
         )
         if (
-            last_values.get("#PD_SDATE") == date_value
-            and last_values.get("#PD_EDATE") == date_value
+            last_values.get("#PD_SDATE") == same_day
+            and last_values.get("#PD_EDATE") == same_day
         ):
             page.wait_for_timeout(500)
             stable_values = page.evaluate("""() => {
@@ -208,13 +211,13 @@ def _set_modal_dates(page, date_value):
                 };
             }""")
             if (
-                stable_values.get("#PD_SDATE") == date_value
-                and stable_values.get("#PD_EDATE") == date_value
+                stable_values.get("#PD_SDATE") == same_day
+                and stable_values.get("#PD_EDATE") == same_day
             ):
                 return
         page.wait_for_timeout(450)
 
-    raise RuntimeError(f"Portal date fields were not retained: {last_values}")
+    raise RuntimeError(f"Portal same-day date fields were not retained: {last_values}")
 
 
 def main():

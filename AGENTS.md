@@ -201,3 +201,4 @@ python app.py
 ## 10. Modal Validation Fix (2026-08-07)
 
 - Updated `app.py` and `automate_submission.py` so Workflow 26 waits for dynamic activity options, verifies the selected activity, re-applies both start/end dates until they persist, and reports invalid portal fields when `#bizModal_402` remains visible after save.
+- Business rule: each plan record is a single-day activity, so `PD_EDATE` must always equal `PD_SDATE`; both automation paths enforce and verify this.
