@@ -60,6 +60,32 @@ const activityOptions = {
 let allRecords = [];
 let selectedFile = null;
 let tempFilename = '';
+// Tracks the month selected by the web-based plan generator.
+// This must take precedence over the Excel sheet selector when submitting.
+let currentPlanMonth = '';
+
+const thaiPlanMonthAbbr = [
+    'มค', 'กพ', 'มีค', 'เมย', 'พค', 'มิย',
+    'กค', 'สค', 'กย', 'ตค', 'พย', 'ธค'
+];
+
+function planMonthToSheetName(planMonth) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(planMonth || ''));
+    if (!match) return '';
+    const month = parseInt(match[2], 10);
+    if (month < 1 || month > 12) return '';
+    const yearBeShort = String(parseInt(match[1], 10) + 543).slice(-2);
+    return `${thaiPlanMonthAbbr[month - 1]}${yearBeShort}`;
+}
+
+function inferPlanMonthFromRecords() {
+    const rec = allRecords.find(item => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(item.date || '')));
+    if (!rec) return '';
+    const [day, month, yearBeText] = String(rec.date).split('/').map(Number);
+    const year = yearBeText >= 2400 ? yearBeText - 543 : yearBeText;
+    if (!day || month < 1 || month > 12 || !year) return '';
+    return `${year}-${String(month).padStart(2, '0')}`;
+}
 let locationPresets = [{ value: "_custom", label: "กำหนดเอง..." }];
 /** Cache villages by tambon_code for per-row linking */
 const rowVillageCache = {};
@@ -2189,6 +2215,8 @@ function onSheetChange() {
 }
 
 function loadRecords(sheetName) {
+    // Loading an Excel sheet switches month authority back to the sheet selector.
+    currentPlanMonth = '';
     const rowCountEl = document.getElementById('row-count');
     rowCountEl.textContent = 'กำลังโหลดตาราง...';
     const apiKey = localStorage.getItem('gemini_api_key') || '';
@@ -2701,6 +2729,7 @@ async function createBlankPlanOnWeb() {
     const today = new Date();
     const currentMonth = today.getMonth() + 1;
     const currentYearBe = today.getFullYear() + 543;
+    currentPlanMonth = `${today.getFullYear()}-${String(currentMonth).padStart(2, '0')}`;
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
 
@@ -2750,6 +2779,7 @@ async function generateMonthScheduleOnWeb() {
     const month = today.getMonth();
     const yearBe = year + 543;
     const monthStr = String(month + 1).padStart(2, '0');
+    currentPlanMonth = `${year}-${monthStr}`;
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
 
@@ -2848,6 +2878,7 @@ function clearPlanTable() {
         'คุณต้องการล้างรายการแผนงานทั้งหมดในตารางใช่หรือไม่?',
         () => {
             allRecords = [];
+            currentPlanMonth = '';
             renderTable(allRecords);
             updateQuickStats();
             addLog('info', 'ล้างข้อมูลตารางเรียบร้อยแล้ว');
@@ -3056,10 +3087,14 @@ function executeAutomation() {
         return;
     }
 
+    const autoPlanMonth = currentPlanMonth || inferPlanMonthFromRecords();
+    const runSheet = autoPlanMonth
+        ? planMonthToSheetName(autoPlanMonth)
+        : document.getElementById('sheet-select').value;
     const payload = {
         username: document.getElementById('username').value.trim(),
         password: document.getElementById('password').value,
-        sheet: document.getElementById('sheet-select').value,
+        sheet: runSheet,
         tambon: document.getElementById('tambon').value.trim() || (built.expandList[0] || ''),
         role: geoState.role,
         office_name: document.getElementById('office-name').value.trim(),
@@ -3407,6 +3442,7 @@ async function generateAutoMonthPlanFromWebUI() {
     const [yearStr, monthStr] = monthSel.split('-');
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10) - 1; // 0-indexed
+    currentPlanMonth = monthSel;
     const yearBe = year + 543;
     const monthFormattedStr = String(month + 1).padStart(2, '0');
 

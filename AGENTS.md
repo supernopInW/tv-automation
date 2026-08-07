@@ -1,6 +1,6 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
-> **Last Updated:** 2026-08-04  
+> **Last Updated:** 2026-08-07
 > **Version:** 1.0.0
 
 ---
@@ -188,5 +188,13 @@ python app.py
 - [ ] *(งานในอนาคต)* เพิ่มระบบ Export Log รายงานการกรอกย้อนหลังเป็น PDF/Excel
 
 ---
+
+## 🔎 9. บันทึกการสำรวจและการแก้ไข (2026-08-07)
+
+- Source ที่ deploy คือไฟล์ในโฟลเดอร์รากและชุด Ready_For_GitHub/ ตรงกับไฟล์สำคัญที่ตรวจสอบแล้ว
+- app.py มี Flask routes 18 รายการ; ข้อมูลภูมิศาสตร์ bundled มี 77 จังหวัด, 928 อำเภอ, 7,364 ตำบล และ 79,818 หมู่บ้าน
+- Smoke check ล่าสุดผ่านการ import app, py_compile, /api/health, /api/districts และ parser ตัวอย่าง Excel
+- แก้ไขการสร้างแผนบนเว็บให้เดือนที่เลือกใน #auto-plan-month เป็นแหล่งเดือนหลักตอนส่ง Workflow 26; หากเป็นแถวที่เพิ่มเอง ระบบจะอนุมานเดือนจากวันที่แถวแรก และยังคงใช้เดือนจาก Excel เมื่อโหลดแผนจากไฟล์
+- ข้อจำกัดเครื่องพัฒนา: คำสั่ง python ไม่อยู่ใน PATH และ venv\Scripts\python.exe ชี้ไปยัง Python ที่ไม่มีอยู่แล้ว จึงใช้ bundled Python runtime ร่วมกับ venv\Lib\site-packages ในการตรวจสอบ
 
 *โปรดจำไว้: ทุกครั้งที่คุณทำการแก้ไขโปรเจกต์นี้ อย่าลืมกลับมารายงานการเปลี่ยนแปลงและปรับปรุงไฟล์ `AGENTS.md` นี้ให้สมบูรณ์ขึ้น!*
