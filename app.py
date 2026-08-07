@@ -319,6 +319,103 @@ def select_by_label_js(page, selector, label):
 
 _THAI_DIGIT_MAP = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 
+def _select_modal_option(page, selector, value, label=""):
+    """Select a dynamic portal option and verify that it remains selected."""
+    target = str(value or "").strip()
+    target_label = str(label or "").strip()
+    last_state = {}
+
+    for _ in range(12):
+        last_state = page.evaluate(
+            """({selector, target, label}) => {
+                const select = document.querySelector(selector);
+                if (!select) return {found: false, reason: 'select-not-found'};
+                const option = Array.from(select.options).find((item) =>
+                    item.value === target || (label && item.text.trim() === label)
+                );
+                if (!option) {
+                    return {
+                        found: false,
+                        reason: 'option-not-found',
+                        options: Array.from(select.options).map((item) => ({
+                            value: item.value,
+                            text: item.text.trim()
+                        }))
+                    };
+                }
+                select.value = option.value;
+                select.dispatchEvent(new Event('input', {bubbles: true}));
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+                if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+                return {found: true, value: option.value, text: option.text.trim()};
+            }""",
+            {"selector": selector, "target": target, "label": target_label},
+        )
+        if last_state.get("found"):
+            page.wait_for_timeout(350)
+            selected = page.evaluate(
+                """(select) => {
+                    const el = document.querySelector(select);
+                    return el ? el.value : '';
+                }""",
+                selector,
+            )
+            if selected == last_state.get("value"):
+                return
+        page.wait_for_timeout(300)
+
+    raise RuntimeError(
+        f"Portal option was not selected for {selector}: "
+        f"target={target!r}, state={last_state}"
+    )
+
+
+def _set_modal_dates(page, date_value):
+    """Set both portal date fields and verify values after dynamic callbacks run."""
+    last_values = {}
+    for _ in range(4):
+        last_values = page.evaluate(
+            """(dateValue) => {
+                const modal = document.querySelector('#bizModal_402');
+                if (!modal) return {};
+                const values = {};
+                ['#PD_SDATE', '#PD_EDATE'].forEach((selector) => {
+                    const input = modal.querySelector(selector);
+                    if (!input) return;
+                    input.removeAttribute('disabled');
+                    input.value = dateValue;
+                    ['input', 'change', 'blur'].forEach((eventName) => {
+                        input.dispatchEvent(new Event(eventName, {bubbles: true}));
+                    });
+                    values[selector] = input.value;
+                });
+                return values;
+            }""",
+            date_value,
+        )
+        if (
+            last_values.get("#PD_SDATE") == date_value
+            and last_values.get("#PD_EDATE") == date_value
+        ):
+            page.wait_for_timeout(500)
+            stable_values = page.evaluate("""() => {
+                const modal = document.querySelector('#bizModal_402');
+                if (!modal) return {};
+                return {
+                    '#PD_SDATE': modal.querySelector('#PD_SDATE')?.value || '',
+                    '#PD_EDATE': modal.querySelector('#PD_EDATE')?.value || ''
+                };
+            }""")
+            if (
+                stable_values.get("#PD_SDATE") == date_value
+                and stable_values.get("#PD_EDATE") == date_value
+            ):
+                return
+        page.wait_for_timeout(450)
+
+    raise RuntimeError(f"Portal date fields were not retained: {last_values}")
+
+
 def thai_to_arabic(text):
     return str(text or "").translate(_THAI_DIGIT_MAP)
 
@@ -1200,9 +1297,14 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
     page.wait_for_timeout(800)
 
     modal = page.locator('#bizModal_402')
-    modal.locator('select#PD_ISSUES').select_option(value=str(rec['issue_val']))
+    _select_modal_option(page, '#bizModal_402 select#PD_ISSUES', rec['issue_val'])
     page.wait_for_timeout(800)
-    modal.locator('select#PD_ACTIVITY').select_option(value=str(rec['activity_val']))
+    _select_modal_option(
+        page,
+        '#bizModal_402 select#PD_ACTIVITY',
+        rec['activity_val'],
+        rec.get('activity', ''),
+    )
 
     # If activity is "999" (อื่นๆ), input#PD_OTHER is mandatory for modal form validation
     if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
@@ -1213,20 +1315,7 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             pass
 
     be_date = rec['date']
-    page.evaluate(f"""(dateVal) => {{
-        const modalEl = document.querySelector('#bizModal_402');
-        if (!modalEl) return;
-        ['#PD_SDATE', '#PD_EDATE'].forEach(sel => {{
-            const el = modalEl.querySelector(sel);
-            if (el) {{
-                el.removeAttribute('disabled');
-                el.value = dateVal;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-            }}
-        }});
-    }}""", be_date)
+    _set_modal_dates(page, be_date)
 
     place = rec.get('location') or ''
     modal.locator('textarea#PD_DETAIL').fill(rec.get('activity') or '')
@@ -1277,7 +1366,29 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             }
         }""")
 
-    page.wait_for_selector('#bizModal_402', state='hidden', timeout=10000)
+    try:
+        page.wait_for_selector('#bizModal_402', state='hidden', timeout=15000)
+    except Exception as exc:
+        validation_state = page.evaluate("""() => {
+            const modal = document.querySelector('#bizModal_402');
+            if (!modal) return {modal: 'missing'};
+            const invalid = Array.from(modal.querySelectorAll(':invalid')).map((el) => ({
+                id: el.id,
+                name: el.name,
+                value: el.value,
+                message: el.validationMessage
+            }));
+            return {
+                invalid,
+                startDate: modal.querySelector('#PD_SDATE')?.value || '',
+                endDate: modal.querySelector('#PD_EDATE')?.value || '',
+                issue: modal.querySelector('#PD_ISSUES')?.value || '',
+                activity: modal.querySelector('#PD_ACTIVITY')?.value || ''
+            };
+        }""")
+        raise RuntimeError(
+            f"Portal modal stayed open after save: {validation_state}"
+        ) from exc
     page.wait_for_timeout(500)
     q.put({"type": "row_status", "index": idx, "status": "success", "message": f"กรอกสำเร็จ: {msg_prefix}"})
 
