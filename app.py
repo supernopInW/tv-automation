@@ -1,6 +1,7 @@
 import sys
 import time
 import re
+import hashlib
 import queue
 import threading
 import uuid
@@ -30,6 +31,18 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Single automation lock for shared Playwright resources (HF Space friendly)
 _run_lock = threading.Lock()
 _run_active = False
+
+# Historical Excel activity pool used by the client-side auto-plan generator.
+# The current upload is intentionally excluded; only workbook files committed
+# at the project root are considered historical reference data.
+_historical_activity_pool_cache = None
+_historical_activity_sources_cache = []
+_historical_activity_errors_cache = []
+_historical_activity_lock = threading.Lock()
+_valid_visiting_activity_values = {
+    "2", "15", "16", "17", "18", "19", "20", "21", "22",
+    "23", "24", "25", "26", "27", "28", "29", "30", "31", "999",
+}
 
 # Helper functions for T&V Portal mapping
 def map_activity(activity_name, tool_name):
@@ -703,6 +716,98 @@ def load_excel_records(xls_path, sheet_name="มิ.ย.69", office_name=None, d
             })
     return apply_sida_office_meeting_rules(records, office_name=office_name)
 
+
+def load_historical_activity_pool():
+    """Build weighted VISITING activities from committed historical workbooks."""
+    global _historical_activity_pool_cache
+    global _historical_activity_sources_cache
+    global _historical_activity_errors_cache
+
+    if _historical_activity_pool_cache is not None:
+        return (
+            _historical_activity_pool_cache,
+            _historical_activity_sources_cache,
+            _historical_activity_errors_cache,
+        )
+
+    with _historical_activity_lock:
+        if _historical_activity_pool_cache is not None:
+            return (
+                _historical_activity_pool_cache,
+                _historical_activity_sources_cache,
+                _historical_activity_errors_cache,
+            )
+
+        weighted = {}
+        sources = []
+        errors = []
+        workbook_names = sorted(
+            name for name in os.listdir(BASE_DIR)
+            if os.path.isfile(os.path.join(BASE_DIR, name))
+            and os.path.splitext(name)[1].lower() in {".xls", ".xlsx"}
+            and not name.startswith("~$")
+        )
+
+        seen_workbook_hashes = set()
+        for workbook_name in workbook_names:
+            workbook_path = os.path.join(BASE_DIR, workbook_name)
+            workbook_loaded = False
+            try:
+                with open(workbook_path, "rb") as workbook_file:
+                    workbook_hash = hashlib.sha1(workbook_file.read()).hexdigest()
+                if workbook_hash in seen_workbook_hashes:
+                    continue
+                seen_workbook_hashes.add(workbook_hash)
+
+                workbook = pd.ExcelFile(workbook_path)
+                for sheet_name in workbook.sheet_names:
+                    if not is_thai_month_sheet(sheet_name):
+                        continue
+                    records = load_excel_records(workbook_path, sheet_name)
+                    workbook_loaded = True
+                    for record in records:
+                        if record.get("officeOnly"):
+                            continue
+                        if str(record.get("issue_val") or "").strip() != "2":
+                            continue
+
+                        activity_val = str(record.get("activity_val") or "").strip()
+                        activity_text = str(record.get("activity") or "").strip()
+                        other_text = str(record.get("other_text") or "").strip()
+                        if activity_val not in _valid_visiting_activity_values or not activity_text:
+                            continue
+
+                        key = (activity_val, activity_text, other_text)
+                        item = weighted.setdefault(
+                            key,
+                            {
+                                "issue_val": "2",
+                                "activity_val": activity_val,
+                                "activity": activity_text,
+                                "other_text": other_text,
+                                "weight": 0,
+                            },
+                        )
+                        item["weight"] += 1
+
+                if workbook_loaded:
+                    sources.append(workbook_name)
+            except Exception as exc:
+                errors.append(f"{workbook_name}: {exc}")
+
+        _historical_activity_pool_cache = sorted(
+            weighted.values(),
+            key=lambda item: (-item["weight"], item["activity_val"], item["activity"]),
+        )
+        _historical_activity_sources_cache = sources
+        _historical_activity_errors_cache = errors
+        return (
+            _historical_activity_pool_cache,
+            _historical_activity_sources_cache,
+            _historical_activity_errors_cache,
+        )
+
+
 def load_excel_records_with_gemini(xls_path, sheet_name, api_key, office_name=None, default_tambon=None):
     if not os.path.exists(xls_path):
         return []
@@ -1254,6 +1359,18 @@ def get_records():
         return jsonify({"success": True, "records": records})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/historical-activities', methods=['GET'])
+def get_historical_activities():
+    """Return weighted field activities from historical root-level Excel files."""
+    activities, source_files, errors = load_historical_activity_pool()
+    return jsonify({
+        "success": True,
+        "activities": activities,
+        "source_files": source_files,
+        "errors": errors,
+        "count": len(activities),
+    })
 
 
 def _month_name_thai_from_sheet(sheet_name):

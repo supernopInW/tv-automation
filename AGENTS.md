@@ -198,7 +198,18 @@ python app.py
 - ข้อจำกัดเครื่องพัฒนา: คำสั่ง python ไม่อยู่ใน PATH และ venv\Scripts\python.exe ชี้ไปยัง Python ที่ไม่มีอยู่แล้ว จึงใช้ bundled Python runtime ร่วมกับ venv\Lib\site-packages ในการตรวจสอบ
 
 *โปรดจำไว้: ทุกครั้งที่คุณทำการแก้ไขโปรเจกต์นี้ อย่าลืมกลับมารายงานการเปลี่ยนแปลงและปรับปรุงไฟล์ `AGENTS.md` นี้ให้สมบูรณ์ขึ้น!*
+
+---
+
+## 11. บันทึกสภาพแวดล้อมการพัฒนา (2026-08-07)
+
+- ตรวจพบไดรฟ์ระบบ C: พื้นที่เต็มจากการสะสมของไฟล์ชั่วคราว/แคชหลายส่วน รวมถึง Windows Installer ประมาณ 2 GB, Playwright browsers ประมาณ 1.46 GB และแคชเบราว์เซอร์/แอปอื่น ๆ
+- ล้างเฉพาะ Temp diagnostics/ตัวติดตั้ง VS Code เก่า, cursor sandbox cache, npm cache, pip cache และ crash dumps แล้ว ได้พื้นที่กลับคืนประมาณ 1.38 GB
+- ห้ามลบ `hiberfil.sys`, Windows Installer หรือโฟลเดอร์ Playwright โดยอัตโนมัติ เพราะอาจกระทบระบบหรือการทดสอบอัตโนมัติ ควรตรวจสอบและยืนยันก่อนทุกครั้ง
+- ล้าง Playwright browser runtimes รุ่นเก่า (Firefox, WebKit, Chromium รุ่นเก่า และ Chromium headless shell) แล้วเมื่อ 2026-08-07 โดยเก็บ Chromium รุ่นปัจจุบันไว้สำหรับระบบอัตโนมัติ
+- เพิ่ม API `/api/historical-activities` เพื่ออ่านกิจกรรมประเด็นเยี่ยมเยียนจาก Excel เก่าระดับ root และส่งค่า `weight` ตามจำนวนครั้งที่พบให้ frontend สุ่มแบบถ่วงน้ำหนัก โดยไม่ใช้ไฟล์อัปโหลดปัจจุบันเป็นแหล่งหลัก
 ## 10. Modal Validation Fix (2026-08-07)
 
 - Updated `app.py` and `automate_submission.py` so Workflow 26 waits for dynamic activity options, verifies the selected activity, re-applies both start/end dates until they persist, and reports invalid portal fields when `#bizModal_402` remains visible after save.
 - Business rule: each plan record is a single-day activity, so `PD_EDATE` must always equal `PD_SDATE`; both automation paths enforce and verify this.
+- Clarified auto-plan requirement: the current uploaded Excel must not be the primary activity source. Random fieldwork activities should be sampled from historical Excel activity records (using the historical pool as a reference), with the built-in pool only as fallback when no historical records are available.

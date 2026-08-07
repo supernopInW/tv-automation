@@ -58,6 +58,8 @@ const activityOptions = {
 };
 
 let allRecords = [];
+let historicalActivityPool = [];
+let historicalActivityPoolLoaded = false;
 let selectedFile = null;
 let tempFilename = '';
 // Tracks the month selected by the web-based plan generator.
@@ -3423,6 +3425,81 @@ const randomActivityPool = [
     { issue_val: "2", activity_val: "21", activity: "การส่งเสริมการทำเกษตรตามแนวทางเกษตรทฤษฎีใหม่" }
 ];
 
+/**
+ * Build a unique pool of field activities from the currently loaded Excel rows.
+ * Only activities valid under T&V's VISITING issue are eligible; office
+ * meeting rows and unsupported activity values are intentionally excluded.
+ */
+function getExcelVisitingActivityPool(records) {
+    const validVisitingValues = new Set(
+        (activityOptions['2'] || []).map(opt => String(opt.value))
+    );
+    const pool = [];
+    const seen = new Set();
+
+    for (const rec of records || []) {
+        if (!rec || rec.officeOnly || String(rec.issue_val) !== '2') continue;
+
+        const activityVal = String(rec.activity_val || '').trim();
+        const activityText = String(rec.activity || '').trim();
+        if (!activityVal || !activityText || !validVisitingValues.has(activityVal)) continue;
+        if (/ประชุมสำนักงาน|ประชุมประจำ|\b(?:DM|WM|MM)\b/i.test(activityText)) continue;
+
+        const key = `${activityVal}|${activityText}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pool.push({
+            issue_val: '2',
+            activity_val: activityVal,
+            activity: activityText,
+            other_text: String(rec.other_text || '').trim()
+        });
+    }
+
+    return pool;
+}
+
+async function loadHistoricalActivityPool() {
+    if (historicalActivityPoolLoaded) return historicalActivityPool;
+
+    try {
+        const response = await fetch('/api/historical-activities');
+        const payload = await response.json();
+        historicalActivityPool = Array.isArray(payload.activities)
+            ? payload.activities.filter(item =>
+                item &&
+                String(item.issue_val) === '2' &&
+                String(item.activity_val || '').trim() &&
+                String(item.activity || '').trim()
+            )
+            : [];
+        historicalActivityPoolLoaded = true;
+        return historicalActivityPool;
+    } catch (error) {
+        historicalActivityPoolLoaded = true;
+        historicalActivityPool = [];
+        addLog('warning', 'โหลดคลังกิจกรรมจาก Excel เก่าไม่สำเร็จ');
+        return historicalActivityPool;
+    }
+}
+
+function pickWeightedActivity(pool) {
+    const candidates = Array.isArray(pool) && pool.length ? pool : randomActivityPool;
+    const totalWeight = candidates.reduce((sum, item) => {
+        const weight = Number(item?.weight);
+        return sum + (Number.isFinite(weight) && weight > 0 ? weight : 1);
+    }, 0);
+    let cursor = Math.random() * totalWeight;
+
+    for (const item of candidates) {
+        const weight = Number(item?.weight);
+        cursor -= Number.isFinite(weight) && weight > 0 ? weight : 1;
+        if (cursor < 0) return item;
+    }
+
+    return candidates[candidates.length - 1];
+}
+
 async function generateAutoMonthPlanFromWebUI() {
     const tbs = [...getResponsibleTambonSet()];
     if (!geoState.setupConfirmed) {
@@ -3446,8 +3523,21 @@ async function generateAutoMonthPlanFromWebUI() {
     const yearBe = year + 543;
     const monthFormattedStr = String(month + 1).padStart(2, '0');
 
-    const randomizeActivities = !!document.getElementById('opt-randomize-activities')?.checked;
     const randomizeVillages = !!document.getElementById('opt-randomize-villages-auto')?.checked;
+    const historicalPool = await loadHistoricalActivityPool();
+    const activitySourcePool = historicalPool.length
+        ? historicalPool
+        : randomActivityPool;
+    const shouldRandomizeActivities = activitySourcePool.length > 0;
+
+    if (historicalPool.length > 0) {
+        addLog(
+            'info',
+            `สุ่มกิจกรรมเยี่ยมเยียนจากคลัง Excel เก่า ${historicalPool.length} รูปแบบ โดยให้น้ำหนักตามจำนวนครั้งที่พบ`
+        );
+    } else {
+        addLog('warning', 'ไม่พบกิจกรรมเยี่ยมเยียนจาก Excel เก่า จึงใช้รายการกิจกรรมสำรองของระบบ');
+    }
 
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
@@ -3504,9 +3594,8 @@ async function generateAutoMonthPlanFromWebUI() {
                 activity: 'การเยี่ยมเยียนส่งเสริมการเกษตรและถ่ายทอดความรู้'
             };
 
-            if (randomizeActivities) {
-                const randIdx = Math.floor(Math.random() * randomActivityPool.length);
-                chosenAct = randomActivityPool[randIdx];
+            if (shouldRandomizeActivities) {
+                chosenAct = pickWeightedActivity(activitySourcePool);
             }
 
             const randTarget = getRandomFieldTargetCount(); // สุ่มจาก [20, 30, 50, 60] คน
@@ -3526,7 +3615,7 @@ async function generateAutoMonthPlanFromWebUI() {
                 co_workers: '',
                 issue_val: chosenAct.issue_val,
                 activity_val: chosenAct.activity_val,
-                other_text: '',
+                other_text: chosenAct.other_text || '',
                 useAllTambons: false
             });
         }
