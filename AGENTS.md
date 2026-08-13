@@ -1,6 +1,6 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
-> **Last Updated:** 2026-08-07
+> **Last Updated:** 2026-08-13
 > **Version:** 1.0.0
 
 ---
@@ -79,6 +79,7 @@ tv_automation/
 │   └── index.html             # 🖼️ หน้าจอ Dashboard หลักสำหรับผู้ใช้งาน
 │
 └── docs/
+    ├── CHANGELOG.md           # บันทึกการแก้ไขและการ deploy
     ├── USER_GUIDE.md          # คู่มือใช้งานอย่างละเอียดสำหรับเจ้าหน้าที่
     ├── WORKFLOW.md            # รายละเอียดกระบวนการแปลง Excel -> T&V Portal
     └── DEPLOY.md              # คู่มือการติดตั้งและ Deploy ระบบ
@@ -208,6 +209,8 @@ python app.py
 - ห้ามลบ `hiberfil.sys`, Windows Installer หรือโฟลเดอร์ Playwright โดยอัตโนมัติ เพราะอาจกระทบระบบหรือการทดสอบอัตโนมัติ ควรตรวจสอบและยืนยันก่อนทุกครั้ง
 - ล้าง Playwright browser runtimes รุ่นเก่า (Firefox, WebKit, Chromium รุ่นเก่า และ Chromium headless shell) แล้วเมื่อ 2026-08-07 โดยเก็บ Chromium รุ่นปัจจุบันไว้สำหรับระบบอัตโนมัติ
 - เพิ่ม API `/api/historical-activities` เพื่ออ่านกิจกรรมประเด็นเยี่ยมเยียนจาก Excel เก่าระดับ root และส่งค่า `weight` ตามจำนวนครั้งที่พบให้ frontend สุ่มแบบถ่วงน้ำหนัก โดยไม่ใช้ไฟล์อัปโหลดปัจจุบันเป็นแหล่งหลัก
+- ปรับ `.dockerignore` ให้ Docker/Render รวมเฉพาะ Excel เก่าที่ใช้สร้างคลังกิจกรรม เพื่อไม่ให้ API ตอบคลังว่างหลัง deploy
+- หน้าสร้างแผนอัตโนมัติแสดงว่ากิจกรรมภาคสนามสุ่มจากประวัติ Excel เสมอ และตัดโค้ดเดิมที่อ่าน allRecords ของไฟล์อัปโหลดปัจจุบันออก เพื่อป้องกันการนำข้อมูลรอบปัจจุบันมาเป็นแหล่งสุ่มโดยไม่ตั้งใจ
 ## 10. Modal Validation Fix (2026-08-07)
 
 - Updated `app.py` and `automate_submission.py` so Workflow 26 waits for dynamic activity options, verifies the selected activity, re-applies both start/end dates until they persist, and reports invalid portal fields when `#bizModal_402` remains visible after save.

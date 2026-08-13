@@ -3425,40 +3425,6 @@ const randomActivityPool = [
     { issue_val: "2", activity_val: "21", activity: "การส่งเสริมการทำเกษตรตามแนวทางเกษตรทฤษฎีใหม่" }
 ];
 
-/**
- * Build a unique pool of field activities from the currently loaded Excel rows.
- * Only activities valid under T&V's VISITING issue are eligible; office
- * meeting rows and unsupported activity values are intentionally excluded.
- */
-function getExcelVisitingActivityPool(records) {
-    const validVisitingValues = new Set(
-        (activityOptions['2'] || []).map(opt => String(opt.value))
-    );
-    const pool = [];
-    const seen = new Set();
-
-    for (const rec of records || []) {
-        if (!rec || rec.officeOnly || String(rec.issue_val) !== '2') continue;
-
-        const activityVal = String(rec.activity_val || '').trim();
-        const activityText = String(rec.activity || '').trim();
-        if (!activityVal || !activityText || !validVisitingValues.has(activityVal)) continue;
-        if (/ประชุมสำนักงาน|ประชุมประจำ|\b(?:DM|WM|MM)\b/i.test(activityText)) continue;
-
-        const key = `${activityVal}|${activityText}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        pool.push({
-            issue_val: '2',
-            activity_val: activityVal,
-            activity: activityText,
-            other_text: String(rec.other_text || '').trim()
-        });
-    }
-
-    return pool;
-}
-
 async function loadHistoricalActivityPool() {
     if (historicalActivityPoolLoaded) return historicalActivityPool;
 
