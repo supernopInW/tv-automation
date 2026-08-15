@@ -44,6 +44,95 @@ _valid_visiting_activity_values = {
     "23", "24", "25", "26", "27", "28", "29", "30", "31", "999",
 }
 
+PORTAL_LOGIN_URL = "https://tandv.doae.go.th/index/login_tv_system.php"
+PORTAL_WORKFLOW_26_URL = "https://tandv.doae.go.th/workflow/workflow_start.php?W=26"
+PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 30_000
+PLAYWRIGHT_ACTION_TIMEOUT_MS = 15_000
+PLAYWRIGHT_RESULT_TIMEOUT_MS = 25_000
+
+
+def _page_diagnostics(page):
+    """Return safe, non-sensitive diagnostics for the current portal page."""
+    try:
+        return page.evaluate("""() => ({
+            url: window.location.href,
+            title: document.title,
+            readyState: document.readyState,
+            bodyText: (document.body?.innerText || '').slice(-2000),
+            loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
+            workflowReady: Boolean(document.querySelector('select#PL_YAER')),
+            modalVisible: Boolean(document.querySelector('#bizModal_402')) &&
+                getComputedStyle(document.querySelector('#bizModal_402')).display !== 'none'
+        })""")
+    except Exception as exc:
+        return {"diagnostics_error": str(exc)}
+
+
+def _wait_for_portal_ready(page, stage):
+    """Wait for Workflow 26 controls and fail with actionable diagnostics."""
+    try:
+        page.wait_for_selector('select#PL_YAER', state='visible', timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+        page.wait_for_selector('select#PL_MOUNT', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        page.wait_for_selector('select#PL_TAMBONN', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    except Exception as exc:
+        state = _page_diagnostics(page)
+        if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
+            code = "AUTH_OR_SESSION_ERROR"
+        else:
+            code = "WORKFLOW_SELECTOR_ERROR"
+        raise RuntimeError(f"{code} at {stage}: {state}") from exc
+
+
+def _assert_authenticated(page):
+    state = _page_diagnostics(page)
+    if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
+        raise RuntimeError(f"AUTHENTICATION_ERROR after login: {state}")
+
+
+def _modal_validation_state(page):
+    """Read the relevant modal values and browser validation errors."""
+    return page.evaluate("""() => {
+        const modal = document.querySelector('#bizModal_402');
+        if (!modal) return {modal: 'missing'};
+        return {
+            invalid: Array.from(modal.querySelectorAll(':invalid')).map((el) => ({
+                id: el.id,
+                name: el.name,
+                value: el.value,
+                message: el.validationMessage
+            })),
+            startDate: modal.querySelector('#PD_SDATE')?.value || '',
+            endDate: modal.querySelector('#PD_EDATE')?.value || '',
+            issue: modal.querySelector('#PD_ISSUES')?.value || '',
+            activity: modal.querySelector('#PD_ACTIVITY')?.value || '',
+            other: modal.querySelector('#PD_OTHER')?.value || '',
+            detail: modal.querySelector('#PD_DETAIL')?.value || '',
+            place: modal.querySelector('#PD_PLACE')?.value || '',
+            target: modal.querySelector('#PD_TARGET')?.value || ''
+        };
+    }""")
+
+
+def _verify_finalize_result(page, mode, before_url):
+    """Classify finalization as confirmed or unknown; never claim success on timeout alone."""
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=PLAYWRIGHT_RESULT_TIMEOUT_MS)
+    except Exception:
+        # Some portal submissions do not navigate; body inspection below is still useful.
+        pass
+    page.wait_for_timeout(1_000)
+    state = _page_diagnostics(page)
+    text = str(state.get("bodyText", "")).lower()
+    success_markers = (
+        "บันทึกข้อมูลเรียบร้อย", "บันทึกเรียบร้อย", "ส่งข้อมูลเรียบร้อย",
+        "ดำเนินการเรียบร้อย", "success", "saved", "completed"
+    )
+    url_changed = bool(state.get("url") and state.get("url") != before_url)
+    has_success_marker = any(marker in text for marker in success_markers)
+    if has_success_marker or (url_changed and not state.get("loginVisible")):
+        return {"confirmed": True, "state": state}
+    return {"confirmed": False, "state": state}
+
 # Helper functions for T&V Portal mapping
 def map_activity(activity_name, tool_name):
     act = activity_name.strip()
@@ -310,25 +399,66 @@ def sanitize_location(location, tool_name, tambon, issue_val, office_name=None, 
     return location
 
 def select_by_value_js(page, selector, value):
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('{selector}');
-        if (select) {{
-            select.value = '{value}';
-            select.dispatchEvent(new Event('change'));
-        }}
-    }}""")
+    """Select a native portal option and verify the resulting value."""
+    result = page.evaluate(
+        """({selector, value}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const option = Array.from(select.options).find((item) => item.value === value);
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                options: Array.from(select.options).map((item) => ({value: item.value, text: item.text.trim()}))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "value": str(value or "").strip()},
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"PORTAL_OPTION_ERROR for {selector}: {result}")
+    page.wait_for_timeout(300)
+    selected = page.locator(selector).input_value()
+    if selected != result.get("value"):
+        raise RuntimeError(
+            f"PORTAL_OPTION_NOT_PERSISTED for {selector}: expected={result.get('value')!r}, got={selected!r}"
+        )
+
 
 def select_by_label_js(page, selector, label):
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('{selector}');
-        if (select) {{
-            const option = Array.from(select.options).find(o => o.text.trim() === '{label}');
-            if (option) {{
-                select.value = option.value;
-                select.dispatchEvent(new Event('change'));
-            }}
-        }}
-    }}""")
+    """Select an option by visible label without interpolating user text into JS."""
+    result = page.evaluate(
+        """({selector, label}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const wanted = String(label || '').trim();
+            const option = Array.from(select.options).find((item) => item.text.trim() === wanted);
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                label: wanted,
+                options: Array.from(select.options).map((item) => ({value: item.value, text: item.text.trim()}))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "label": str(label or "").strip()},
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"PORTAL_OPTION_ERROR for {selector}: {result}")
+    page.wait_for_timeout(300)
+    selected = page.locator(selector).input_value()
+    if selected != result.get("value"):
+        raise RuntimeError(
+            f"PORTAL_OPTION_NOT_PERSISTED for {selector}: expected={result.get('value')!r}, got={selected!r}"
+        )
+
 
 _THAI_DIGIT_MAP = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 
@@ -1412,9 +1542,9 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
     msg_prefix = f"รายการที่แถว {rec.get('id', idx)}: {activity_preview}..."
     q.put({"type": "row_status", "index": idx, "status": "processing", "message": f"กำลังกรอก: {msg_prefix}"})
 
-    page.click('a:has-text("เพิ่มข้อมูล")')
-    page.wait_for_selector('#bizModal_402', state='visible')
-    page.wait_for_timeout(800)
+    page.locator('a:has-text("เพิ่มข้อมูล")').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    page.wait_for_selector('#bizModal_402', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    page.wait_for_timeout(500)
 
     modal = page.locator('#bizModal_402')
     _select_modal_option(page, '#bizModal_402 select#PD_ISSUES', rec['issue_val'])
@@ -1428,11 +1558,13 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
 
     # If activity is "999" (อื่นๆ), input#PD_OTHER is mandatory for modal form validation
     if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
-        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30]
-        try:
-            modal.locator('input#PD_OTHER').fill(other_val)
-        except Exception:
-            pass
+        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30].strip()
+        other_input = modal.locator('input#PD_OTHER')
+        if other_input.count() != 1:
+            raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER is required for activity 999")
+        other_input.fill(other_val)
+        if not other_input.input_value().strip():
+            raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER remained empty for activity 999")
 
     be_date = rec['date']
     _set_modal_dates(page, be_date)
@@ -1463,113 +1595,131 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             btn.classList.remove('disabled');
         }
     }""")
-    page.wait_for_timeout(300)
+    validation_state = _modal_validation_state(page)
+    required_fields = {
+        "issue": str(rec.get("issue_val") or ""),
+        "activity": str(rec.get("activity_val") or ""),
+        "startDate": str(be_date),
+        "endDate": str(be_date),
+        "detail": str(rec.get("activity") or ""),
+        "place": place,
+        "target": str(rec.get("target_num") or 0),
+    }
+    for field, expected in required_fields.items():
+        actual = str(validation_state.get(field) or "")
+        if field in ("detail", "place"):
+            if expected and actual != expected:
+                raise RuntimeError(f"MODAL_FIELD_MISMATCH: {field} expected={expected!r}, actual={actual!r}")
+        elif actual != expected:
+            raise RuntimeError(f"MODAL_FIELD_MISMATCH: {field} expected={expected!r}, actual={actual!r}")
+    if validation_state.get("invalid"):
+        raise RuntimeError(f"MODAL_VALIDATION_ERROR before save: {validation_state}")
 
-    # Click submit button with JS fallback if Playwright actionability fails
+    # Click the modal's save control. Do not submit the form natively because that
+    # bypasses the portal validation and makes the final result ambiguous.
     try:
-        modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=5000)
-    except Exception:
-        page.evaluate("""() => {
+        modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    except Exception as click_exc:
+        fallback_result = page.evaluate("""() => {
             const modalEl = document.querySelector('#bizModal_402');
-            if (!modalEl) return;
+            if (!modalEl) return {clicked: false, reason: 'modal-not-found'};
             const btn = Array.from(modalEl.querySelectorAll('button, input[type="submit"]'))
                 .find(b => (b.textContent || '').includes('บันทึก') || (b.value || '').includes('บันทึก'))
                 || modalEl.querySelector('button[type="submit"]')
                 || modalEl.querySelector('button.btn-primary');
-            if (btn) {
-                btn.removeAttribute('disabled');
-                btn.disabled = false;
-                btn.click();
-            } else {
-                const form = modalEl.querySelector('form');
-                if (form) form.submit();
-            }
+            if (!btn) return {clicked: false, reason: 'save-button-not-found'};
+            btn.removeAttribute('disabled');
+            btn.disabled = false;
+            btn.classList.remove('disabled');
+            btn.click();
+            return {clicked: true};
         }""")
+        if not fallback_result.get("clicked"):
+            raise RuntimeError(f"MODAL_SAVE_CONTROL_ERROR: {fallback_result}") from click_exc
 
     try:
-        page.wait_for_selector('#bizModal_402', state='hidden', timeout=15000)
+        page.wait_for_selector('#bizModal_402', state='hidden', timeout=PLAYWRIGHT_RESULT_TIMEOUT_MS)
     except Exception as exc:
-        validation_state = page.evaluate("""() => {
-            const modal = document.querySelector('#bizModal_402');
-            if (!modal) return {modal: 'missing'};
-            const invalid = Array.from(modal.querySelectorAll(':invalid')).map((el) => ({
-                id: el.id,
-                name: el.name,
-                value: el.value,
-                message: el.validationMessage
-            }));
-            return {
-                invalid,
-                startDate: modal.querySelector('#PD_SDATE')?.value || '',
-                endDate: modal.querySelector('#PD_EDATE')?.value || '',
-                issue: modal.querySelector('#PD_ISSUES')?.value || '',
-                activity: modal.querySelector('#PD_ACTIVITY')?.value || ''
-            };
-        }""")
+        validation_state = _modal_validation_state(page)
         raise RuntimeError(
-            f"Portal modal stayed open after save: {validation_state}"
+            f"MODAL_SAVE_UNCONFIRMED: portal modal stayed open: {validation_state}"
         ) from exc
     page.wait_for_timeout(500)
     q.put({"type": "row_status", "index": idx, "status": "success", "message": f"กรอกสำเร็จ: {msg_prefix}"})
 
 
 def _select_approver(page, approver):
-    safe = (approver or "").replace("'", "\\'")
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('select#USR_APPROVERS');
-        if (select) {{
-            const searchName = '{safe}'.trim();
-            let option = Array.from(select.options).find(o => o.text.trim() === searchName);
-            if (!option) {{
-                option = Array.from(select.options).find(o => o.text.includes(searchName));
-            }}
-            if (!option) {{
-                option = Array.from(select.options).find(o => searchName.includes(o.text.trim()));
-            }}
-            if (option) {{
-                select.value = option.value;
-                select.dispatchEvent(new Event('change'));
-            }}
-        }}
-    }}""")
+    """Select and verify an approver; never continue with a silent no-op."""
+    requested = str(approver or "").strip()
+    if not requested:
+        raise RuntimeError("APPROVER_ERROR: approver name is empty")
+    result = page.evaluate(
+        """(requested) => {
+            const select = document.querySelector('select#USR_APPROVERS');
+            if (!select) return {found: false, reason: 'select-not-found'};
+            let option = Array.from(select.options).find((item) => item.text.trim() === requested);
+            if (!option) option = Array.from(select.options).find((item) => item.text.includes(requested));
+            if (!option) option = Array.from(select.options).find((item) => requested.includes(item.text.trim()));
+            if (!option) return {
+                found: false,
+                reason: 'approver-not-found',
+                requested,
+                options: Array.from(select.options).map((item) => item.text.trim())
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        requested,
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"APPROVER_ERROR: {result}")
+    page.wait_for_timeout(300)
+    selected = page.locator('select#USR_APPROVERS').input_value()
+    if selected != result.get("value"):
+        raise RuntimeError(
+            f"APPROVER_NOT_PERSISTED: expected={result.get('value')!r}, got={selected!r}"
+        )
 
 
 def _finish_plan(page, mode, q):
     if mode == 'dry_run':
         q.put({"type": "info", "message": "กรอกข้อมูลเสร็จสิ้นในโหมด Dry-run สำหรับตำบลนี้แล้ว"})
         return
+
     if mode == 'draft':
+        button_selector = '#wf-btn-temp-save'
+        label = 'บันทึกข้อมูลแบบชั่วคราว (ร่าง)'
         q.put({"type": "info", "message": "กำลังกดปุ่มบันทึกชั่วคราว (Save Draft)..."})
-        page.click('#wf-btn-temp-save')
-        try:
-            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-            q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกชั่วคราว..."})
-            page.click('button.confirm')
-            page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        page.evaluate("""() => {
-            const form = document.querySelector('#form_wf') || document.querySelector('form');
-            if (form) form.submit();
-        }""")
-        page.wait_for_timeout(5000)
-        q.put({"type": "info", "message": "บันทึกข้อมูลแบบชั่วคราว (ร่าง) เรียบร้อยแล้ว!"})
     else:
+        button_selector = '#wf-btn-save'
+        label = 'บันทึกและส่งข้อมูล'
         q.put({"type": "info", "message": "กำลังกดปุ่มบันทึกและส่งแผน..."})
-        page.click('#wf-btn-save')
-        try:
-            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-            q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกและส่งแผน..."})
-            page.click('button.confirm')
-            page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        page.evaluate("""() => {
-            const form = document.querySelector('#form_wf') || document.querySelector('form');
-            if (form) form.submit();
-        }""")
-        page.wait_for_timeout(5000)
-        q.put({"type": "info", "message": "บันทึกและส่งข้อมูลเรียบร้อยแล้ว!"})
+
+    before_url = page.url
+    page.locator(button_selector).click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    try:
+        page.wait_for_selector('button.confirm', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        q.put({"type": "info", "message": f"กำลังกดยืนยัน{label}..."})
+        page.locator('button.confirm').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    except Exception as exc:
+        # Do not call native form.submit() here: it bypasses portal validation and
+        # would make it impossible to distinguish a rejected save from a success.
+        result = _verify_finalize_result(page, mode, before_url)
+        if not result.get("confirmed"):
+            raise RuntimeError(
+                f"FINALIZE_CONFIRMATION_ERROR: {label} was not confirmed: {result.get('state')}"
+            ) from exc
+
+    result = _verify_finalize_result(page, mode, before_url)
+    if not result.get("confirmed"):
+        raise RuntimeError(
+            f"FINALIZE_UNKNOWN_RESULT: {label} may or may not have been processed; "
+            f"do not retry without checking the portal: {result.get('state')}"
+        )
+    q.put({"type": "info", "message": f"ยืนยันผลแล้ว: {label}"})
 
 
 @app.route('/api/run', methods=['POST'])
@@ -1621,6 +1771,7 @@ def run_automation():
 
         def run_playwright():
             from playwright.sync_api import sync_playwright
+            browser = None
             try:
                 q.put({"type": "info", "message": f"พื้นที่: {office_name or '-'} | บทบาท: {role} | ตำบลที่จะกรอก: {len(groups)} กลุ่ม"})
                 q.put({"type": "info", "message": "กำลังเปิดเบราว์เซอร์..."})
@@ -1628,33 +1779,32 @@ def run_automation():
                     browser = p.chromium.launch(headless=headless)
                     context = browser.new_context()
                     page = context.new_page()
+                    page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
 
                     q.put({"type": "info", "message": "กำลังเข้าสู่ระบบเว็บ T&V..."})
-                    page.goto("https://tandv.doae.go.th/index/login_tv_system.php")
-                    page.wait_for_load_state("networkidle")
+                    page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                    page.wait_for_selector('input[name="USER_NAME"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.wait_for_selector('input[name="USER_PASSWORD"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
                     page.fill('input[name="USER_NAME"]', username)
                     page.fill('input[name="USER_PASSWORD"]', password)
-                    page.click('#login_submit')
-                    page.wait_for_timeout(4000)
-
-                    if "login" in page.url:
-                        q.put({"type": "error", "message": "เข้าสู่ระบบไม่สำเร็จ! กรุณาตรวจสอบรหัสผ่านอีกครั้ง"})
-                        browser.close()
-                        return
+                    page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(2_000)
+                    _assert_authenticated(page)
 
                     for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
                         q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
-                        page.goto("https://tandv.doae.go.th/workflow/workflow_start.php?W=26")
-                        page.wait_for_load_state("networkidle")
-                        page.wait_for_timeout(2000)
+                        page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                        _assert_authenticated(page)
+                        _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
 
                         q.put({"type": "info", "message": f"เลือก ปี {year_num}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
                         select_by_value_js(page, 'select#PL_YAER', year_num)
-                        page.wait_for_timeout(800)
+                        page.wait_for_timeout(500)
                         select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
-                        page.wait_for_timeout(800)
+                        page.wait_for_timeout(700)
                         select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
-                        page.wait_for_timeout(1200)
+                        page.wait_for_timeout(700)
 
                         for idx, rec in indexed_recs:
                             try:
@@ -1663,11 +1813,13 @@ def run_automation():
                                 q.put({"type": "row_status", "index": idx, "status": "error",
                                        "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
                                 try:
-                                    shot_path = os.path.join("static", f"{shot_prefix}_{idx}.png")
+                                    shot_name = f"{shot_prefix}_{idx}.png"
+                                    shot_path = os.path.join(BASE_DIR, "static", shot_name)
                                     page.screenshot(path=shot_path)
-                                    q.put({"type": "screenshot", "url": f"/static/{shot_prefix}_{idx}.png"})
-                                except Exception:
-                                    pass
+                                    q.put({"type": "screenshot", "url": f"/static/{shot_name}"})
+                                    q.put({"type": "diagnostics", "index": idx, "details": _page_diagnostics(page)})
+                                except Exception as screenshot_exc:
+                                    q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {screenshot_exc}"})
                                 try:
                                     if page.locator('#bizModal_402').is_visible():
                                         page.keyboard.press('Escape')
@@ -1686,11 +1838,20 @@ def run_automation():
                             q.put({"type": "info", "message": "Dry-run ครบทุกตำบล — เบราว์เซอร์จะเปิดค้างไว้ 3 นาทีเพื่อตรวจสอบ"})
                             page.wait_for_timeout(180000)
 
-                    browser.close()
                     q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ!"})
             except Exception as ex:
                 q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})
             finally:
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception as close_exc:
+                        q.put({"type": "info", "message": f"ปิดเบราว์เซอร์ไม่สมบูรณ์: {close_exc}"})
+                _run_active = False
+                try:
+                    _run_lock.release()
+                except RuntimeError:
+                    pass
                 q.put(None)
 
         t = threading.Thread(target=run_playwright)
@@ -1703,11 +1864,10 @@ def run_automation():
                     break
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
-            _run_active = False
-            try:
-                _run_lock.release()
-            except RuntimeError:
-                pass
+            # The worker owns the lock and releases it only after Playwright has
+            # actually stopped. This prevents a disconnected SSE client from
+            # allowing a second run to overlap the first one.
+            _run_active = True
 
     return Response(event_stream(), mimetype='text/event-stream')
 
