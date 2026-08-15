@@ -371,3 +371,11 @@ Security checker และ regression coverage รอบล่าสุดผ่
 
 - Security Gate รอบล่าสุด build production image ผ่านแล้ว แต่ขั้น `python3 -m py_compile app.py` ล้มเพราะ `appuser` ไม่มีสิทธิ์เขียน `__pycache__` ใต้ `/code` ซึ่งเป็นพฤติกรรมที่ถูกต้องของ non-root image.
 - ปรับ CI ให้ตั้ง `PYTHONPYCACHEPREFIX=/tmp/pycache` ระหว่าง compile ภายใน container เพื่อคง non-root permission boundary และยังตรวจ syntax ของ app.py ได้จริง. ห้ามแก้ด้วยการเปิด write permission กว้างให้ `/code`.
+
+
+## 28. CodeQL DOM XSS and Information Exposure Remediation (2026-08-16)
+
+- PR CodeQL ตรวจพบสองประเด็นใน duplicate source tree: historical loader ส่ง exception detail ออก API และ dynamic Workflow 26 row นำ activity/date text จาก Excel ไปประกอบ HTML.
+- แก้ historical loader ทั้ง root และ Ready_For_GitHub ให้ส่งเฉพาะข้อความทั่วไปโดยไม่แนบ `Exception` หรือ stack detail.
+- เพิ่ม `escapeHtml()` ที่ encode `&`, `<`, `>`, quotes และให้ `escapeAttr()` ใช้ encoder เดียวกัน; dynamic row fields และ issue option labels ถูก encode ก่อนเข้า reviewed template sink. Root และ Ready_For_GitHub ถูกแก้ให้ตรงกัน.
+- Local JavaScript/Python syntax, 25 regression tests, inline scan, Semgrep baseline 0 findings และ `git diff --check` ผ่าน; ต้อง push แล้วตรวจ GitHub Advanced Security CodeQL check ใหม่ก่อนสรุป PR.

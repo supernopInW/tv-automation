@@ -1331,8 +1331,8 @@ def load_historical_activity_pool():
 
                 if workbook_loaded:
                     sources.append(workbook_name)
-            except Exception as exc:
-                errors.append(f"{workbook_name}: {exc}")
+            except Exception:
+                errors.append(f"{workbook_name}: ไม่สามารถอ่านไฟล์อ้างอิงได้")
 
         _historical_activity_pool_cache = sorted(
             weighted.values(),

@@ -1174,8 +1174,18 @@ function fillPresetSelect() {
     });
 }
 
+function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[char]);
+}
+
 function escapeAttr(s) {
-    return String(s).replace(/"/g, '&quot;');
+    return escapeHtml(s);
 }
 
 function findByName(list, name) {
@@ -2351,15 +2361,20 @@ function renderTable(records) {
         let issueOptionsHtml = '';
         for (const [val, label] of Object.entries(issueOptions)) {
             const selected = val === String(rec.issue_val) ? 'selected' : '';
-            issueOptionsHtml += `<option value="${val}" ${selected}>${label}</option>`;
+            issueOptionsHtml += `<option value="${escapeAttr(val)}" ${selected}>${escapeHtml(label)}</option>`;
         }
         const tambonVal = rec.tambon || geoState.tambonName || '';
         const useAll = !!rec.useAllTambons;
+        const rowIdText = escapeHtml(rec.id);
+        const dateValue = escapeAttr(rec.date || '');
+        const activityText = escapeHtml(rec.activity || '');
+        const tambonValue = escapeAttr(bareTambonName(tambonVal));
+        const targetValue = escapeAttr(rec.target_num || 0);
         // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         tr.innerHTML = `
-            <td class="text-center csp-row-index">${rec.id}</td>
+            <td class="text-center csp-row-index">${rowIdText}</td>
             <td class="row-date-col">
-                <input type="text" class="cell-input csp-date-input" id="date-${idx}" value="${rec.date || ''}" title="${rec.date || ''}" data-csp-change="onRowDateChanged" data-csp-row-index="${idx}">
+                <input type="text" class="cell-input csp-date-input" id="date-${idx}" value="${dateValue}" title="${dateValue}" data-csp-change="onRowDateChanged" data-csp-row-index="${idx}">
             </td>
             <td class="row-issue-col">
                 <div class="cell-stack">
@@ -2379,16 +2394,16 @@ function renderTable(records) {
                 <div class="desc-combo">
                     <select class="cell-input cell-select" id="desc-select-${idx}" data-csp-change="onDescChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="desc-select-${idx}"></select>
                     <div class="cell-fulltext" id="desc-select-${idx}-fulltext"></div>
-                    <textarea class="cell-input csp-activity-textarea" id="activity-${idx}" placeholder="พิมพ์รายละเอียด...">${rec.activity || ''}</textarea>
+                    <textarea class="cell-input csp-activity-textarea" id="activity-${idx}" placeholder="พิมพ์รายละเอียด...">${activityText}</textarea>
                 </div>
             </td>
             <td class="row-location-col">
                 <div class="place-builder" id="place-builder-${idx}"></div>
                 <div class="location-preview place-final-preview" id="location-preview-${idx}" title="ข้อความที่จะกรอกใน PD_PLACE"></div>
-                <input type="hidden" id="tambon-${idx}" value="${bareTambonName(tambonVal)}">
+                <input type="hidden" id="tambon-${idx}" value="${tambonValue}">
             </td>
             <td class="row-target-col text-center">
-                <input type="number" class="cell-input text-center" id="target-${idx}" value="${rec.target_num || 0}">
+                <input type="number" class="cell-input text-center" id="target-${idx}" value="${targetValue}">
             </td>
             <td class="row-status-col text-center" id="status-${idx}">
                 <span class="status-badge badge-ready">พร้อมกรอก</span>
