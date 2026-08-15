@@ -81,9 +81,9 @@ def _page_diagnostics(page):
                 readyState: document.readyState,
                 bodyText: (document.body?.innerText || '').slice(-2000),
                 loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
-                workflowReady: ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'].every((selector) =>
-                    workflowControls[selector]?.present && workflowControls[selector].optionCount > 1
-                ),
+                workflowReady: workflowControls['#PL_YAER']?.present && workflowControls['#PL_YAER'].optionCount > 1 &&
+                    workflowControls['#PL_MOUNT']?.present && workflowControls['#PL_MOUNT'].optionCount >= 1 &&
+                    workflowControls['#PL_TAMBONN']?.present && workflowControls['#PL_TAMBONN'].optionCount > 1,
                 workflowControls,
                 modalVisible: Boolean(document.querySelector('#bizModal_402')) &&
                     getComputedStyle(document.querySelector('#bizModal_402')).display !== 'none'
@@ -100,10 +100,14 @@ def _wait_for_portal_ready(page, stage):
         # hides the backing elements. Wait for attachment and populated options,
         # not CSS visibility of the raw <select>.
         page.wait_for_function("""() => {
-            const required = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'];
-            return required.every((selector) => {
+            const minimums = {
+                '#PL_YAER': 2,
+                '#PL_MOUNT': 1,
+                '#PL_TAMBONN': 2
+            };
+            return Object.entries(minimums).every(([selector, minimum]) => {
                 const el = document.querySelector(selector);
-                return el && el.options && el.options.length > 1;
+                return el && el.options && el.options.length >= minimum;
             });
         }""", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
     except Exception as exc:
@@ -113,6 +117,22 @@ def _wait_for_portal_ready(page, stage):
         else:
             code = "WORKFLOW_SELECTOR_ERROR"
         raise RuntimeError(f"{code} at {stage}: {state}") from exc
+
+
+def _wait_for_select_options(page, selector, minimum, stage):
+    """Wait for a dynamic Select2 backing select to receive enough options."""
+    try:
+        page.wait_for_function(
+            """({selector, minimum}) => {
+                const el = document.querySelector(selector);
+                return Boolean(el && el.options && el.options.length >= minimum);
+            }""",
+            {"selector": selector, "minimum": int(minimum)},
+            timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS,
+        )
+    except Exception as exc:
+        state = _page_diagnostics(page)
+        raise RuntimeError(f"WORKFLOW_DYNAMIC_OPTION_ERROR at {stage}: {state}") from exc
 
 
 def _assert_authenticated(page):
@@ -1832,7 +1852,7 @@ def run_automation():
 
                         q.put({"type": "info", "message": f"เลือก ปี {year_num}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
                         select_by_value_js(page, 'select#PL_YAER', year_num)
-                        page.wait_for_timeout(500)
+                        _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
                         select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
                         page.wait_for_timeout(700)
                         select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
