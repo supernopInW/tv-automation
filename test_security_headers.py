@@ -5,6 +5,12 @@ import time
 
 from werkzeug.security import generate_password_hash
 
+# Offline tests intentionally use in-memory limiter storage; production guard
+# remains fail-closed in the application runtime.
+os.environ['APP_ENV'] = 'test'
+os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
+os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
+
 import app as app_module
 from app import app
 
@@ -104,7 +110,8 @@ def test_auth_login_and_mutation_require_csrf_token():
         app_module.APP_AUTH_PASSWORD_HASH = old_hash
 
 
-def test_upload_rejects_disallowed_extension_and_invalid_magic_bytes():
+def test_upload_rejects_disallowed_extension_and_invalid_magic_bytes(monkeypatch):
+    monkeypatch.setattr(app_module, 'APP_AUTH_REQUIRED', False)
     client = app.test_client()
     csrf = _csrf_token(client)
 
@@ -151,6 +158,59 @@ def test_upload_registry_binds_path_to_owner():
             pass
 
 
+def test_server_side_profile_rejects_client_supplied_scope_and_submit():
+    old_required = app_module.APP_AUTH_REQUIRED
+    old_username = app_module.APP_AUTH_USERNAME
+    old_hash = app_module.APP_AUTH_PASSWORD_HASH
+    old_role = app_module.APP_AUTH_ROLE
+    old_office = app_module.APP_AUTH_OFFICE_NAME
+    old_tambons = app_module.APP_AUTH_ALLOWED_TAMBONS
+    old_approvers = app_module.APP_AUTH_ALLOWED_APPROVERS
+    old_can_submit = app_module.APP_AUTH_CAN_SUBMIT
+    try:
+        app_module.APP_AUTH_REQUIRED = True
+        app_module.APP_AUTH_USERNAME = 'security-test-user'
+        app_module.APP_AUTH_PASSWORD_HASH = generate_password_hash('security-test-password')
+        app_module.APP_AUTH_ROLE = 'officer'
+        app_module.APP_AUTH_OFFICE_NAME = 'สำนักงานทดสอบ'
+        app_module.APP_AUTH_ALLOWED_TAMBONS = frozenset({'ตำบลหนองตาดใหญ่'})
+        app_module.APP_AUTH_ALLOWED_APPROVERS = frozenset({'ผู้อนุมัติทดสอบ'})
+        app_module.APP_AUTH_CAN_SUBMIT = False
+
+        context, error = app_module._validate_run_authorization({
+            'selected_tambons': ['ตำบลอื่น'],
+            'tambon': 'ตำบลอื่น',
+            'role': 'admin_clerk',
+            'office_name': 'สำนักงานอื่น',
+            'approver': 'ผู้อนุมัติอื่น',
+            'mode': 'submit',
+            'records': [],
+        })
+        assert context is None
+        assert error[1] == 403
+
+        context, error = app_module._validate_run_authorization({
+            'selected_tambons': ['ตำบลหนองตาดใหญ่'],
+            'tambon': 'ตำบลหนองตาดใหญ่',
+            'role': 'admin_clerk',
+            'office_name': 'สำนักงานอื่น',
+            'approver': 'ผู้อนุมัติทดสอบ',
+            'mode': 'submit',
+            'records': [{'tambon': 'ตำบลหนองตาดใหญ่'}],
+        })
+        assert context is None
+        assert error[1] == 403
+    finally:
+        app_module.APP_AUTH_REQUIRED = old_required
+        app_module.APP_AUTH_USERNAME = old_username
+        app_module.APP_AUTH_PASSWORD_HASH = old_hash
+        app_module.APP_AUTH_ROLE = old_role
+        app_module.APP_AUTH_OFFICE_NAME = old_office
+        app_module.APP_AUTH_ALLOWED_TAMBONS = old_tambons
+        app_module.APP_AUTH_ALLOWED_APPROVERS = old_approvers
+        app_module.APP_AUTH_CAN_SUBMIT = old_can_submit
+
+
 def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     with open('static/app.js', encoding='utf-8') as handle:
         source = handle.read()
@@ -175,6 +235,12 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert 'screenshot(path=' not in backend_source
     assert 'screenshot(path=' not in cli_source
     assert 'modal_error.html' not in cli_source
+    diagnostics_start = backend_source.index('def _page_diagnostics')
+    diagnostics_end = backend_source.index('def _wait_for_portal_ready', diagnostics_start)
+    diagnostics_source = backend_source[diagnostics_start:diagnostics_end]
+    assert 'bodyText:' not in diagnostics_source
+    assert 'document.title' not in diagnostics_source
+    assert 'value: el.value' not in diagnostics_source
 
 
 if __name__ == '__main__':

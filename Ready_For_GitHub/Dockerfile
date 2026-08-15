@@ -13,11 +13,12 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 RUN playwright install chromium
 
-COPY . /code
+RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin appuser \
+    && mkdir -p /tmp/tv-automation-uploads \
+    && chown -R appuser:appuser /tmp/tv-automation-uploads
 
-# Ensure runtime dirs exist (uploads/static writable for HF UID 1000)
-RUN mkdir -p /code/uploads /code/static /code/data/villages \
-    && chmod -R 777 /code
+COPY --chown=appuser:appuser . /code
+USER appuser
 
 EXPOSE 7860
 

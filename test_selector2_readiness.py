@@ -1,4 +1,10 @@
+import os
 from pathlib import Path
+
+# Offline tests intentionally use in-memory limiter storage.
+os.environ['APP_ENV'] = 'test'
+os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
+os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
 
 import app
 

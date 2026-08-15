@@ -6,12 +6,13 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: tv_automation_app
+    # Keep the application behind a local reverse proxy/firewall by default.
     ports:
-      - "7860:7860"
+      - "127.0.0.1:7860:7860"
+    user: "1000:1000"
     environment:
       - PORT=7860
       - HEADLESS=1
       - FLASK_DEBUG=0
+      - APP_AUTH_REQUIRED=${APP_AUTH_REQUIRED:-1}
     restart: unless-stopped
-    volumes:
-      - ./uploads:/code/uploads

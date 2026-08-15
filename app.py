@@ -21,22 +21,41 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
 import geo_data
 
+APP_SESSION_SECRET = os.environ.get('APP_SESSION_SECRET', '').strip()
+
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
-app.config['SECRET_KEY'] = os.environ.get('APP_SESSION_SECRET', '') or secrets.token_urlsafe(32)
+app.config['SECRET_KEY'] = APP_SESSION_SECRET or secrets.token_urlsafe(32)
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_BYTES', str(10 * 1024 * 1024)))
 
-APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '0').strip().lower() in {'1', 'true', 'yes'}
+APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '1').strip().lower() in {'1', 'true', 'yes'}
 APP_AUTH_USERNAME = os.environ.get('APP_AUTH_USERNAME', '').strip()
 APP_AUTH_PASSWORD_HASH = os.environ.get('APP_AUTH_PASSWORD_HASH', '').strip()
-RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://')
-if APP_AUTH_REQUIRED and not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH):
+APP_AUTH_ROLE = os.environ.get('APP_AUTH_ROLE', 'officer').strip()
+APP_AUTH_OFFICE_NAME = os.environ.get('APP_AUTH_OFFICE_NAME', '').strip()
+APP_AUTH_ALLOWED_TAMBONS = frozenset(
+    item.strip() for item in os.environ.get('APP_AUTH_ALLOWED_TAMBONS', '').split(',') if item.strip()
+)
+APP_AUTH_ALLOWED_APPROVERS = frozenset(
+    item.strip() for item in os.environ.get('APP_AUTH_ALLOWED_APPROVERS', '').split(',') if item.strip()
+)
+APP_AUTH_CAN_SUBMIT = os.environ.get('APP_AUTH_CAN_SUBMIT', '0').strip().lower() in {'1', 'true', 'yes'}
+APP_ENV = os.environ.get('APP_ENV', 'development').strip().lower()
+RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://').strip()
+if APP_ENV in {'production', 'prod'} and RATE_LIMIT_STORAGE_URI.startswith('memory://'):
+    raise RuntimeError('RATELIMIT_STORAGE_URI must be a shared Redis URI in production')
+if APP_ENV in {'production', 'prod'} and APP_AUTH_REQUIRED:
+    if not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET):
+        raise RuntimeError('Production application authentication secrets are not configured')
+    if not (APP_AUTH_ROLE and APP_AUTH_OFFICE_NAME and APP_AUTH_ALLOWED_TAMBONS and APP_AUTH_ALLOWED_APPROVERS):
+        raise RuntimeError('Production authorization profile is not configured')
+if APP_AUTH_REQUIRED and not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET):
     # Fail closed for protected requests; never use a source-code default.
-    print('APP_AUTH_REQUIRED=1 but APP_AUTH_USERNAME/PASSWORD_HASH is not configured')
+    print('APP_AUTH_REQUIRED=1 but authentication secrets are not configured')
 if RATE_LIMIT_STORAGE_URI == 'memory://':
     print('WARNING: RATELIMIT_STORAGE_URI=memory:// is for development only')
 
@@ -81,11 +100,86 @@ def _csrf_valid():
 
 
 def _auth_configured():
-    return bool(APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH)
+    return bool(APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET)
 
 
 def _app_authenticated():
     return bool(session.get('app_user'))
+
+
+def _normalize_tambon_name(value):
+    return str(value or '').replace('ตำบล', '').replace('แขวง', '').strip()
+
+
+def _server_auth_profile():
+    return {
+        'username': APP_AUTH_USERNAME,
+        'role': APP_AUTH_ROLE or 'officer',
+        'office_name': APP_AUTH_OFFICE_NAME,
+        'allowed_tambons': APP_AUTH_ALLOWED_TAMBONS,
+        'allowed_approvers': APP_AUTH_ALLOWED_APPROVERS,
+        'can_submit': APP_AUTH_CAN_SUBMIT,
+    }
+
+
+def _auth_profile_configured():
+    return bool(
+        APP_AUTH_ROLE
+        and APP_AUTH_OFFICE_NAME
+        and APP_AUTH_ALLOWED_TAMBONS
+        and APP_AUTH_ALLOWED_APPROVERS
+    )
+
+
+def _validate_run_authorization(data):
+    """Derive automation scope from the server profile when app auth is enabled."""
+    requested_mode = str(data.get('mode', 'dry_run') or 'dry_run').strip()
+    if 'dry_run' in data and requested_mode == 'dry_run' and data.get('dry_run') is False:
+        requested_mode = 'submit'
+    if requested_mode not in {'dry_run', 'draft', 'submit'}:
+        return None, ({'success': False, 'error': 'โหมดการทำงานไม่ถูกต้อง'}, 400)
+
+    if not APP_AUTH_REQUIRED:
+        return {
+            'tambon': data.get('tambon', ''),
+            'role': data.get('role', 'officer'),
+            'office_name': data.get('office_name', ''),
+            'approver': data.get('approver', ''),
+            'mode': requested_mode,
+        }, None
+
+    if not _auth_profile_configured():
+        return None, ({'success': False, 'error': 'ยังไม่ได้ตั้งค่า server-side authorization profile'}, 503)
+
+    profile = _server_auth_profile()
+    requested_tambons = list(data.get('selected_tambons') or [])
+    if not requested_tambons and data.get('tambon'):
+        requested_tambons = [data.get('tambon')]
+    normalized_requested = {_normalize_tambon_name(item) for item in requested_tambons if str(item).strip()}
+    unauthorized_tambons = normalized_requested - {_normalize_tambon_name(item) for item in profile['allowed_tambons']}
+    if not normalized_requested or unauthorized_tambons:
+        return None, ({'success': False, 'error': 'ไม่มีสิทธิ์ใช้พื้นที่ที่ร้องขอ'}, 403)
+
+    requested_approver = str(data.get('approver') or '').strip()
+    if requested_approver not in profile['allowed_approvers']:
+        return None, ({'success': False, 'error': 'ไม่มีสิทธิ์ใช้ผู้อนุมัติที่ร้องขอ'}, 403)
+    if requested_mode == 'submit' and not profile['can_submit']:
+        return None, ({'success': False, 'error': 'บัญชีนี้ไม่มีสิทธิ์ส่งข้อมูลจริง'}, 403)
+
+    for record in data.get('records') or []:
+        record_tambon = _normalize_tambon_name(record.get('tambon') or data.get('tambon'))
+        if record_tambon and record_tambon not in {
+            _normalize_tambon_name(item) for item in profile['allowed_tambons']
+        }:
+            return None, ({'success': False, 'error': 'ข้อมูลแถวมีตำบลนอกสิทธิ์'}, 403)
+
+    return {
+        'tambon': next(iter(normalized_requested)),
+        'role': profile['role'],
+        'office_name': profile['office_name'],
+        'approver': requested_approver,
+        'mode': requested_mode,
+    }, None
 
 
 @app.before_request
@@ -271,7 +365,6 @@ def _page_diagnostics(page):
                 workflowControls[selector] = {
                     present: true,
                     optionCount: el.options ? el.options.length : 0,
-                    value: el.value || '',
                     ariaHidden: el.getAttribute('aria-hidden'),
                     display: style.display,
                     visibility: style.visibility,
@@ -279,10 +372,8 @@ def _page_diagnostics(page):
                 };
             }
             return {
-                url: window.location.href,
-                title: document.title,
+                urlPath: window.location.pathname,
                 readyState: document.readyState,
-                bodyText: (document.body?.innerText || '').slice(-2000),
                 loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
                 workflowReady: workflowControls['#PL_YAER']?.present && workflowControls['#PL_YAER'].optionCount > 1 &&
                     workflowControls['#PL_MOUNT']?.present && workflowControls['#PL_MOUNT'].optionCount >= 1 &&
@@ -1738,20 +1829,22 @@ def run_automation():
     global _run_active
     data = request.json or {}
     records = data.get('records', [])
+    run_context, authorization_error = _validate_run_authorization(data)
+    if authorization_error:
+        error_body, error_status = authorization_error
+        return jsonify(error_body), error_status
+
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     sheet_name = data.get('sheet', 'มิ.ย.69')
-    tambon = data.get('tambon', '')
-    role = data.get('role', 'officer')
-    office_name = data.get('office_name', '')
-    approver = data.get('approver', '')
+    tambon = run_context['tambon']
+    role = run_context['role']
+    office_name = run_context['office_name']
+    approver = run_context['approver']
     headless = data.get('headless', False)
     if sys.platform != 'win32' or os.environ.get('HEADLESS', '0') == '1':
         headless = True
-    mode = data.get('mode', 'dry_run')
-    if 'dry_run' in data and mode == 'dry_run':
-        if not data['dry_run']:
-            mode = 'submit'
+    mode = run_context['mode']
 
     # Each officer must supply their own T&V account — never use shared defaults
     if not username or not password:

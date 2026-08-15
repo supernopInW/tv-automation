@@ -85,8 +85,44 @@ def check_app_auth(repo_root: Path, findings: list[Finding]) -> None:
     else:
         _add(findings, "APP_AUTH_REQUIRED.environment", PASS, "พบ production authentication environment contract")
 
+    profile_envs = (
+        "APP_AUTH_ROLE",
+        "APP_AUTH_OFFICE_NAME",
+        "APP_AUTH_ALLOWED_TAMBONS",
+        "APP_AUTH_ALLOWED_APPROVERS",
+        "APP_AUTH_CAN_SUBMIT",
+    )
+    missing_profile_envs = [name for name in profile_envs if name not in source]
+    has_profile_guard = "def _auth_profile_configured()" in source and "_validate_run_authorization" in source
+    if not missing_profile_envs and has_profile_guard:
+        _add(findings, "APP_AUTH_REQUIRED.authorization_profile", PASS, "พบ server-side authorization profile และ validation helper")
+    else:
+        detail = ", ".join(missing_profile_envs) if missing_profile_envs else "authorization validation helper"
+        _add(
+            findings,
+            "APP_AUTH_REQUIRED.authorization_profile",
+            FAIL,
+            "ไม่พบ contract ของ " + detail,
+            "derive role/office/tambon/approver/can_submit จาก authenticated identity และ validate ก่อนเริ่ม automation",
+        )
+
     has_config_guard = "if APP_AUTH_REQUIRED and not _auth_configured()" in source
     has_session_guard = "if APP_AUTH_REQUIRED and not _app_authenticated()" in source
+    has_startup_auth_guard = (
+        "if APP_ENV in {'production', 'prod'} and APP_AUTH_REQUIRED:" in source
+        and "Production application authentication secrets are not configured" in source
+        and "Production authorization profile is not configured" in source
+    )
+    if has_startup_auth_guard:
+        _add(findings, "APP_AUTH_REQUIRED.startup_guard", PASS, "production startup จะ fail closed เมื่อ auth secret/profile ไม่ครบ")
+    else:
+        _add(
+            findings,
+            "APP_AUTH_REQUIRED.startup_guard",
+            FAIL,
+            "ไม่พบ production startup guard สำหรับ auth secret/profile",
+            "ให้ production container หยุดทำงานเมื่อ authentication หรือ authorization profile ไม่ครบ",
+        )
     if has_config_guard and has_session_guard:
         _add(findings, "APP_AUTH_REQUIRED.fail_closed", PASS, "พบ config guard และ unauthenticated-session guard")
     else:
@@ -115,6 +151,21 @@ def check_app_auth(repo_root: Path, findings: list[Finding]) -> None:
             FAIL,
             "/api/run ไม่ได้ถูกยืนยันว่าอยู่ใน protected API set",
             "เพิ่ม /api/run ใน protected API boundary และทดสอบ unauthenticated access",
+        )
+
+    production_rate_limit_guard = (
+        "APP_ENV in {'production', 'prod'}" in source
+        and "RATE_LIMIT_STORAGE_URI.startswith('memory://')" in source
+    )
+    if production_rate_limit_guard:
+        _add(findings, "APP_AUTH_REQUIRED.rate_limit_storage", PASS, "production memory:// rate limit ถูก fail-closed")
+    else:
+        _add(
+            findings,
+            "APP_AUTH_REQUIRED.rate_limit_storage",
+            FAIL,
+            "ไม่พบ guard ที่ห้ามใช้ memory:// ใน production",
+            "ตั้ง RATELIMIT_STORAGE_URI เป็น shared Redis และให้ production startup ปฏิเสธ memory://",
         )
 
     login_limit = re.search(r"@limiter\.limit\(\s*['\"]5 per minute; 20 per hour['\"]", source)
@@ -182,7 +233,7 @@ def check_docker_permissions(repo_root: Path, findings: list[Finding]) -> None:
             "ใช้ COPY --chown=appuser:appuser . /code หรือกำหนด ownership อย่างชัดเจนก่อน USER appuser",
         )
 
-    if re.search(r"chown\s+-R\s+[^\s]+\s+/code", normalized):
+    if re.search(r"chown\s+-R\s+[^\s]+\s+/code", normalized) or re.search(r"COPY\s+--chown=[^\s]+\s+\.\s+/code", normalized):
         _add(findings, "Docker.permissions.ownership", PASS, "มีการกำหนด ownership ของ /code อย่างชัดเจน")
     else:
         _add(
@@ -214,6 +265,19 @@ def check_docker_permissions(repo_root: Path, findings: list[Finding]) -> None:
                 "docker-compose ไม่ได้กำหนด user โดยตรง",
                 "กำหนด non-root user ให้สอดคล้องกับ Dockerfile หาก compose ใช้ใน production",
             )
+
+        public_port = re.search(r"['\"](?:0\.0\.0\.0:)?7860:7860['\"]", compose_source)
+        local_port = re.search(r"['\"]127\.0\.0\.1:7860:7860['\"]", compose_source)
+        if public_port and not local_port:
+            _add(
+                findings,
+                "Docker.permissions.compose_port",
+                FAIL,
+                "docker-compose publish port 7860 ออกทุก interface",
+                "bind เป็น 127.0.0.1:7860:7860 หรือไม่ publish port และใช้ reverse proxy/private network",
+            )
+        else:
+            _add(findings, "Docker.permissions.compose_port", PASS, "ไม่มีการ publish port 7860 ออกสู่ public interface")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

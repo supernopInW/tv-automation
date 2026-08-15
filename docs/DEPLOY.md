@@ -17,7 +17,27 @@ cd tv_automation
 docker compose up -d --build
 ```
 
-แอปพลิเคชันจะทำงานทันทีที่ URL: **`http://<IP-ของเซิร์ฟเวอร์>:7860`**
+Compose จะ bind application ไว้ที่ **`127.0.0.1:7860`** เท่านั้น ไม่ควรเปิด port 7860 ออก Internet โดยตรง ให้ใช้ reverse proxy ที่บังคับ HTTPS และ authentication/network policy แทน
+
+### Environment ที่ต้องตั้งก่อน production
+
+ตั้งค่าผ่าน secret manager ของผู้ให้บริการหรือไฟล์ environment ที่อยู่นอก Git repository โดยห้ามใส่ password, password hash, session secret หรือ Redis credential ลงใน source code
+
+```bash
+APP_ENV=production
+APP_AUTH_REQUIRED=1
+APP_AUTH_USERNAME=<app-username>
+APP_AUTH_PASSWORD_HASH=<werkzeug-password-hash>
+APP_SESSION_SECRET=<random-secret-32-bytes-or-more>
+APP_AUTH_ROLE=officer
+APP_AUTH_OFFICE_NAME=<authorized-office>
+APP_AUTH_ALLOWED_TAMBONS=<comma-separated-authorized-tambons>
+APP_AUTH_ALLOWED_APPROVERS=<comma-separated-authorized-approvers>
+APP_AUTH_CAN_SUBMIT=0
+RATELIMIT_STORAGE_URI=redis://<redis-host>:<port>/<db>
+```
+
+เมื่อ `APP_AUTH_REQUIRED=1` ระบบจะ derive role, office, allowed tambons, approvers และสิทธิ์ submit จาก server-side profile แทนค่าที่ client ส่งมา หาก profile ไม่ครบหรือใช้ `memory://` ใน production ระบบต้อง fail closed และไม่ควรเริ่มให้บริการสาธารณะ
 
 ---
 
@@ -62,7 +82,12 @@ python -u scripts/build_geo_data.py
 
 ## 5. Checklist ก่อนเปิดใช้งานจริง (Production Checklist)
 
-- [x] ไฟล์ `docker-compose.yml` และ `Dockerfile` พร้อมใช้งาน
+- [x] Docker runtime ใช้ non-root user และไม่มี `chmod -R 777`
+- [x] Compose bind port เฉพาะ `127.0.0.1:7860` และใช้ reverse proxy สำหรับ HTTPS
+- [x] `APP_AUTH_REQUIRED=1` และ authentication profile ครบถ้วน
+- [x] ตั้ง `RATELIMIT_STORAGE_URI` เป็น shared Redis URI ที่ไม่ใช่ `memory://`
+- [x] ตรวจ server-side authorization ของ role/office/tambon/approver และ `can_submit`
+- [x] ใช้ `requirements.txt` และ `requirements.lock` แบบ exact pins
 - [x] มีโฟลเดอร์ `data/` และฐานข้อมูลภูมิศาสตร์ไทยครบถ้วน
 - [x] ตรวจสอบระบบสุ่มสร้างแผนบนเว็บ / อัปโหลด Excel
 - [x] ตรวจสอบกฎวันจันทร์ (DM/WM) และการใช้จำนวนสมาชิกสำนักงาน

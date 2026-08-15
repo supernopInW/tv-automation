@@ -339,3 +339,14 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - ตรวจ syntax Python/JavaScript, regression 17 tests, credential cleanup และ `git diff --check` ผ่านหลังการเปลี่ยนแปลง
 - ห้ามนำข้อมูล Excel ที่มีข้อมูลส่วนบุคคลหรือข้อมูลภายในไปยังบริการ AI ภายนอกผ่านระบบนี้ เพราะระบบถูกออกแบบให้ไม่เชื่อมต่อ external AI แล้ว
 - หยุดการทำสไลด์ชั่วคราวตามคำขอ และให้การแก้โค้ด/validation เป็นงานหลักของรอบนี้
+
+
+## Security Audit รอบที่ 3 — remediation status (2026-08-15)
+
+รอบนี้แก้ประเด็น Critical/High และ deployment safeguards ที่ตรวจได้จาก source code แล้ว ได้แก่ เปลี่ยน `APP_AUTH_REQUIRED` default เป็น `1`, เพิ่ม server-side authorization profile สำหรับ role/office/allowed tambons/allowed approvers/สิทธิ์ submit, และ whitelist `mode` ก่อนเริ่ม Playwright โดยไม่เชื่อค่าขอบเขตจาก client เมื่อเปิด app auth
+
+Dockerfile หลักและชุด `Ready_For_GitHub` ใช้ non-root `appuser`, `COPY --chown`, จำกัด writable directory ไว้ที่ `/tmp/tv-automation-uploads` และไม่มี `chmod -R 777` อีกต่อไป ส่วน Compose bind port เป็น `127.0.0.1:7860:7860` และใช้ UID 1000 เพื่อไม่เปิด application ตรงสู่ public interface โดย default
+
+เพิ่ม exact-pinned `requirements.txt` และ `requirements.lock`; เพิ่ม production guard ให้ `APP_ENV=production` ปฏิเสธ `memory://` rate-limit storage และลด diagnostics จาก portal โดยไม่ส่ง body text, title, full URL หรือค่า select กลับ authenticated client
+
+Security checker และ regression coverage รอบล่าสุดผ่าน 23 tests และ checker 13/13 checks; หากพบข้อมูลหรือสิทธิ์ไม่ครบใน production ให้ระบบ fail closed และต้องตั้ง environment/ACL ให้ครบก่อนเปิดใช้งานจริง

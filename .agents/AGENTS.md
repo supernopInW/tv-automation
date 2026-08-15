@@ -190,3 +190,14 @@ python app.py
 ---
 
 *โปรดจำไว้: ทุกครั้งที่คุณทำการแก้ไขโปรเจกต์นี้ อย่าลืมกลับมารายงานการเปลี่ยนแปลงและปรับปรุงไฟล์ `AGENTS.md` นี้ให้สมบูรณ์ขึ้น!*
+
+
+## Security Audit รอบที่ 3 — remediation status
+
+- เปลี่ยน `APP_AUTH_REQUIRED` default เป็น `1` เพื่อ fail-closed; production จะไม่ยอมใช้ `memory://` เป็น rate-limit storage เมื่อ `APP_ENV=production`
+- เพิ่ม server-side authorization profile ผ่าน `APP_AUTH_ROLE`, `APP_AUTH_OFFICE_NAME`, `APP_AUTH_ALLOWED_TAMBONS`, `APP_AUTH_ALLOWED_APPROVERS` และ `APP_AUTH_CAN_SUBMIT`; `/api/run` ไม่เชื่อ role/office/tambon/approver/mode จาก client เมื่อเปิด app auth
+- เปลี่ยน Docker runtime เป็น non-root `appuser`, ใช้ `COPY --chown`, จำกัด writable path ไว้ที่ `/tmp/tv-automation-uploads` และเลิก `chmod -R 777`
+- Docker Compose bind port เป็น `127.0.0.1:7860:7860`, ใช้ UID 1000 และตั้ง `APP_AUTH_REQUIRED` default เป็น `1`
+- เพิ่ม exact-pinned `requirements.txt` และ `requirements.lock` เพื่อป้องกัน dependency drift
+- ลด portal diagnostics ให้ไม่ส่ง body text, title, full URL หรือค่าของ select กลับ authenticated client; คงเฉพาะ state ที่จำเป็นต่อการ debug
+- เพิ่ม security checker และ regression tests สำหรับ auth profile, rate-limit storage, Docker permission และ compose port; validation ล่าสุดผ่าน 23 tests และ checker 13/13 checks
