@@ -36,7 +36,9 @@ jobs:
       - name: Compile Python files
         run: python -m py_compile app.py automate_submission.py
       - name: Check JavaScript syntax
-        run: node --check static/app.js
+        run: |
+          node --check static/auth.js
+          node --check static/app.js
       - name: Run offline regression tests
         run: |
           python test_security_headers.py

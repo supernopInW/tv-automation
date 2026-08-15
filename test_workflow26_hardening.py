@@ -49,7 +49,12 @@ def test_finalize_confirmed_by_portal_marker():
 
 def test_run_rejects_missing_credentials_without_starting_browser():
     client = app.app.test_client()
-    response = client.post("/api/run", json={"records": [], "mode": "dry_run"})
+    csrf = client.get("/api/access/status").get_json()["csrf_token"]
+    response = client.post(
+        "/api/run",
+        json={"records": [], "mode": "dry_run"},
+        headers={"X-CSRF-Token": csrf},
+    )
     assert response.status_code == 400
     payload = response.get_json()
     assert payload["success"] is False

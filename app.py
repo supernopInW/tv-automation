@@ -1,21 +1,117 @@
 import sys
+import io
 import time
 import re
 import hashlib
+import hmac
 import queue
+import secrets
 import threading
-import uuid
+import zipfile
+import tempfile
+from pathlib import Path
+
 import pandas as pd
-from flask import Flask, render_template, jsonify, request, Response, send_from_directory
+from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import json
 import os
-from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.security import check_password_hash
 from google import genai
 import geo_data
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
+app.config['SECRET_KEY'] = os.environ.get('APP_SESSION_SECRET', '') or secrets.token_urlsafe(32)
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_BYTES', str(10 * 1024 * 1024)))
+
+APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '0').strip().lower() in {'1', 'true', 'yes'}
+APP_AUTH_USERNAME = os.environ.get('APP_AUTH_USERNAME', '').strip()
+APP_AUTH_PASSWORD_HASH = os.environ.get('APP_AUTH_PASSWORD_HASH', '').strip()
+RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://')
+if APP_AUTH_REQUIRED and not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH):
+    # Fail closed for protected requests; never use a source-code default.
+    print('APP_AUTH_REQUIRED=1 but APP_AUTH_USERNAME/PASSWORD_HASH is not configured')
+if RATE_LIMIT_STORAGE_URI == 'memory://':
+    print('WARNING: RATELIMIT_STORAGE_URI=memory:// is for development only')
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    storage_uri=RATE_LIMIT_STORAGE_URI,
+    strategy='moving-window',
+    headers_enabled=True,
+)
+
+PROTECTED_API_PATHS = {
+    '/api/add-row', '/api/upload', '/api/sheets', '/api/records',
+    '/api/historical-activities', '/api/run',
+}
+PUBLIC_API_PATHS = {'/api/health', '/api/access/status', '/api/auth/login', '/api/auth/logout', '/api/csp-report'}
+
+UPLOAD_TTL_SECONDS = int(os.environ.get('UPLOAD_TTL_SECONDS', '1800'))
+UPLOAD_REGISTRY = {}
+UPLOAD_REGISTRY_LOCK = threading.Lock()
+ALLOWED_UPLOAD_EXTENSIONS = {'.xls', '.xlsx'}
+OLE_COMPOUND_FILE_HEADER = bytes.fromhex('D0CF11E0A1B11AE1')
+
+
+def _rate_limit_key():
+    """Use the platform-derived remote address after proxy configuration is verified."""
+    return get_remote_address() or 'unknown'
+
+
+def _ensure_csrf_token():
+    token = session.get('csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['csrf_token'] = token
+    return token
+
+
+def _csrf_valid():
+    expected = session.get('csrf_token', '')
+    supplied = request.headers.get('X-CSRF-Token', '')
+    return bool(expected and supplied) and hmac.compare_digest(supplied, expected)
+
+
+def _auth_configured():
+    return bool(APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH)
+
+
+def _app_authenticated():
+    return bool(session.get('app_user'))
+
+
+@app.before_request
+def enforce_api_access_boundary():
+    if not request.path.startswith('/api/'):
+        return None
+    if request.path in {'/api/health', '/api/csp-report'}:
+        return None
+    _ensure_csrf_token()
+    if request.path in {'/api/access/status', '/api/auth/login', '/api/auth/logout'}:
+        if request.path != '/api/access/status' and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and not _csrf_valid():
+            return jsonify({'success': False, 'error': 'คำขอไม่ผ่านการตรวจสอบความปลอดภัย'}), 403
+        return None
+    if APP_AUTH_REQUIRED and not _auth_configured():
+        return jsonify({'success': False, 'error': 'ระบบยืนยันตัวตนยังไม่ได้ตั้งค่า'}), 503
+    if APP_AUTH_REQUIRED and not _app_authenticated():
+        return jsonify({'success': False, 'error': 'กรุณาเข้าสู่ระบบแอปก่อนใช้งาน'}), 401
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and not _csrf_valid():
+        return jsonify({'success': False, 'error': 'คำขอไม่ผ่านการตรวจสอบความปลอดภัย'}), 403
+    return None
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_request_too_large(_error):
+    return jsonify({'success': False, 'error': 'ไฟล์หรือคำขอมีขนาดใหญ่เกินกำหนด'}), 413
 
 # Strict CSP is shipped in Report-Only mode first because the legacy template
 # still contains inline event handlers, inline style attributes, and JSON-LD.
@@ -63,8 +159,78 @@ os.makedirs('docs', exist_ok=True)
 # Global variables and paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_XLS_PATH = os.path.join(BASE_DIR, "แผนเดือนพค69.xls")
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "tv-automation-uploads")
+os.makedirs(UPLOAD_DIR, mode=0o700, exist_ok=True)
+
+
+def _cleanup_expired_uploads():
+    now = time.time()
+    with UPLOAD_REGISTRY_LOCK:
+        expired = [upload_id for upload_id, meta in UPLOAD_REGISTRY.items()
+                   if now - meta.get('created_at', now) > UPLOAD_TTL_SECONDS]
+        for upload_id in expired:
+            meta = UPLOAD_REGISTRY.pop(upload_id, {})
+            path = meta.get('path')
+            if path:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+
+
+def _upload_owner_key():
+    app_user = session.get('app_user')
+    if app_user:
+        return f"app:{app_user}"
+    # Anonymous uploads are bound to the signed browser session, not only to
+    # the remote IP, because multiple officers may share a proxy/NAT address.
+    owner_token = session.get('upload_owner_token')
+    if not owner_token:
+        owner_token = secrets.token_urlsafe(32)
+        session['upload_owner_token'] = owner_token
+    return f"session:{owner_token}"
+
+
+def _get_owned_upload_path(upload_id):
+    _cleanup_expired_uploads()
+    with UPLOAD_REGISTRY_LOCK:
+        meta = UPLOAD_REGISTRY.get(upload_id)
+        if not meta or meta.get('owner') != _upload_owner_key():
+            return None
+        path = meta.get('path')
+        if not path or not os.path.isfile(path):
+            UPLOAD_REGISTRY.pop(upload_id, None)
+            return None
+        return path
+
+
+def _validate_excel_payload(file_storage):
+    original = (file_storage.filename or '').strip()
+    suffix = Path(original).suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError('รูปแบบไฟล์ไม่ถูกต้อง กรุณาอัปโหลดเฉพาะไฟล์ .xls หรือ .xlsx')
+    payload = file_storage.stream.read(app.config['MAX_CONTENT_LENGTH'] + 1)
+    file_storage.stream.seek(0)
+    if len(payload) > app.config['MAX_CONTENT_LENGTH']:
+        raise RequestEntityTooLarge()
+    if suffix == '.xls':
+        if not payload.startswith(OLE_COMPOUND_FILE_HEADER):
+            raise ValueError('โครงสร้างไฟล์ XLS ไม่ถูกต้อง')
+    else:
+        if not payload.startswith(b'PK\\x03\\x04'):
+            raise ValueError('โครงสร้างไฟล์ XLSX ไม่ถูกต้อง')
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                names = archive.namelist()
+                if len(names) > 1000 or any(name.startswith('/') or '..' in Path(name).parts for name in names):
+                    raise ValueError('โครงสร้างไฟล์ XLSX ไม่ปลอดภัย')
+                if sum(info.file_size for info in archive.infolist()) > 50 * 1024 * 1024:
+                    raise ValueError('ข้อมูลภายในไฟล์ XLSX มีขนาดเกินกำหนด')
+                if not {'[Content_Types].xml', 'xl/workbook.xml'}.issubset(names):
+                    raise ValueError('ไม่ใช่ไฟล์ XLSX ที่สมบูรณ์')
+        except zipfile.BadZipFile as exc:
+            raise ValueError('ไฟล์ XLSX เสียหายหรือไม่ใช่ ZIP package') from exc
+    return suffix
 
 # Single automation lock for shared Playwright resources (HF Space friendly)
 _run_lock = threading.Lock()
@@ -1418,6 +1584,42 @@ def load_excel_records_with_gemini(xls_path, sheet_name, api_key, office_name=No
         rec["id"] = i
     return apply_sida_office_meeting_rules(records, office_name=office)
 
+@app.route('/api/access/status')
+def access_status():
+    return jsonify({
+        'success': True,
+        'auth_required': APP_AUTH_REQUIRED,
+        'authenticated': _app_authenticated(),
+        'csrf_token': _ensure_csrf_token(),
+    })
+
+
+@app.route('/api/auth/login', methods=['POST'])
+@limiter.limit('5 per minute; 20 per hour', key_func=_rate_limit_key)
+def app_login():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if len(username) > 256 or len(password) > 1024:
+        return jsonify({'success': False, 'error': 'เข้าสู่ระบบไม่สำเร็จ'}), 401
+    if not _auth_configured():
+        return jsonify({'success': False, 'error': 'ระบบยืนยันตัวตนยังไม่ได้ตั้งค่า'}), 503
+    valid = hmac.compare_digest(username, APP_AUTH_USERNAME) and check_password_hash(APP_AUTH_PASSWORD_HASH, password)
+    if not valid:
+        return jsonify({'success': False, 'error': 'เข้าสู่ระบบไม่สำเร็จ'}), 401
+    session.clear()
+    session['app_user'] = APP_AUTH_USERNAME
+    session['csrf_token'] = secrets.token_urlsafe(32)
+    session.permanent = True
+    return jsonify({'success': True, 'csrf_token': session['csrf_token']})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def app_logout():
+    session.clear()
+    return ('', 204)
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -1502,6 +1704,7 @@ def api_location_presets():
     return jsonify({"success": True, "presets": presets})
 
 @app.route('/api/add-row', methods=['POST'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
 def add_row():
     """Create a blank row template for the frontend."""
     data = request.json or {}
@@ -1539,65 +1742,79 @@ def add_row():
     })
 
 @app.route('/api/upload', methods=['POST'])
+@limiter.limit('5 per 10 minutes', key_func=_rate_limit_key)
 def upload_file():
+    _cleanup_expired_uploads()
     if 'file' not in request.files:
-        return jsonify({"success": False, "error": "ไม่พบไฟล์ที่อัปโหลด"})
-        
+        return jsonify({"success": False, "error": "ไม่พบไฟล์ที่อัปโหลด"}), 400
+
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({"success": False, "error": "กรุณาเลือกไฟล์ Excel"})
-        
-    if not (file.filename.endswith('.xls') or file.filename.endswith('.xlsx')):
-        return jsonify({"success": False, "error": "รูปแบบไฟล์ไม่ถูกต้อง กรุณาอัปโหลดเฉพาะไฟล์ .xls หรือ .xlsx"})
-        
+    if not file.filename:
+        return jsonify({"success": False, "error": "กรุณาเลือกไฟล์ Excel"}), 400
+
+    save_path = None
     try:
-        ext = os.path.splitext(file.filename)[1]
-        unique_name = secure_filename(f"{int(time.time())}_{os.urandom(4).hex()}{ext}")
-        save_path = os.path.join(UPLOAD_DIR, unique_name)
+        suffix = _validate_excel_payload(file)
+        upload_id = secrets.token_urlsafe(24)
+        save_path = os.path.join(UPLOAD_DIR, f"{upload_id}{suffix}")
         file.save(save_path)
-        
-        # Load sheets
         xl = pd.ExcelFile(save_path)
         sheets = [sh for sh in xl.sheet_names if is_thai_month_sheet(sh)]
         sheets.sort(key=lambda sh: get_sheet_sort_key(sh, save_path), reverse=True)
-        
+        with UPLOAD_REGISTRY_LOCK:
+            UPLOAD_REGISTRY[upload_id] = {
+                'path': save_path,
+                'owner': _upload_owner_key(),
+                'created_at': time.time(),
+            }
         return jsonify({
-            "success": True, 
-            "message": "อัปโหลดไฟล์สำเร็จ!", 
+            "success": True,
+            "message": "อัปโหลดไฟล์สำเร็จ!",
             "sheets": sheets,
-            "filename": file.filename,
-            "temp_filename": unique_name
+            "filename": "ไฟล์ Excel ที่อัปโหลด",
+            "temp_filename": upload_id,
         })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except RequestEntityTooLarge:
+        raise
+    except Exception:
+        if save_path:
+            try:
+                os.remove(save_path)
+            except FileNotFoundError:
+                pass
+        return jsonify({"success": False, "error": "ไม่สามารถตรวจสอบหรืออ่านไฟล์ Excel ได้"}), 400
+
+def _resolve_workbook_path(temp_filename=''):
+    if temp_filename:
+        return _get_owned_upload_path(temp_filename)
+    return DEFAULT_XLS_PATH
+
 
 @app.route('/api/sheets', methods=['GET'])
 def get_sheets():
     try:
-        temp_filename = request.args.get('temp_filename', '')
-        safe_filename = secure_filename(temp_filename) if temp_filename else ""
-        xls_path = os.path.join(UPLOAD_DIR, safe_filename) if safe_filename else DEFAULT_XLS_PATH
-        
-        if not os.path.exists(xls_path):
-            return jsonify({"success": True, "sheets": [], "current_file": ""})
-            
+        xls_path = _resolve_workbook_path(request.args.get('temp_filename', '').strip())
+        if not xls_path or not os.path.isfile(xls_path):
+            return jsonify({"success": False, "error": "ไม่พบไฟล์หรือไม่มีสิทธิ์เข้าถึงไฟล์"}), 404
         xl = pd.ExcelFile(xls_path)
         sheets = [sh for sh in xl.sheet_names if is_thai_month_sheet(sh)]
         sheets.sort(key=lambda sh: get_sheet_sort_key(sh, xls_path), reverse=True)
         return jsonify({"success": True, "sheets": sheets, "current_file": os.path.basename(xls_path)})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        return jsonify({"success": False, "error": "ไม่สามารถอ่านรายการแผ่นงานได้"}), 400
 
 @app.route('/api/records', methods=['GET'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
 def get_records():
     sheet = request.args.get('sheet', 'มิ.ย.69')
-    temp_filename = request.args.get('temp_filename', '')
-    safe_filename = secure_filename(temp_filename) if temp_filename else ""
-    xls_path = os.path.join(UPLOAD_DIR, safe_filename) if safe_filename else DEFAULT_XLS_PATH
+    temp_filename = request.args.get('temp_filename', '').strip()
+    xls_path = _resolve_workbook_path(temp_filename)
     api_key = request.headers.get('X-Gemini-API-Key', '').strip()
     office_name = request.args.get('office_name', '').strip() or request.headers.get('X-Office-Name', '').strip()
     default_tambon = request.args.get('tambon', '').strip() or request.headers.get('X-Tambon', '').strip()
     try:
+        if not xls_path or not os.path.isfile(xls_path):
+            return jsonify({"success": False, "error": "ไม่พบไฟล์หรือไม่มีสิทธิ์เข้าถึงไฟล์"}), 404
         if api_key:
             print("Using Gemini API for parsing and classification...")
             try:
@@ -1617,8 +1834,8 @@ def get_records():
             )
 
         return jsonify({"success": True, "records": records})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        return jsonify({"success": False, "error": "ไม่สามารถอ่านข้อมูลแผนงานได้"}), 400
 
 @app.route('/api/historical-activities', methods=['GET'])
 def get_historical_activities():
@@ -1667,7 +1884,7 @@ def _group_records_by_tambon(records, default_tambon, role):
     return [(k, groups[k]) for k in order]
 
 
-def _fill_record_row(page, rec, idx, q, shot_prefix):
+def _fill_record_row(page, rec, idx, q):
     activity_preview = (rec.get('activity') or '')[:30]
     msg_prefix = f"รายการที่แถว {rec.get('id', idx)}: {activity_preview}..."
     q.put({"type": "row_status", "index": idx, "status": "processing", "message": f"กำลังกรอก: {msg_prefix}"})
@@ -1872,6 +2089,7 @@ def _finish_plan(page, mode, q):
 
 
 @app.route('/api/run', methods=['POST'])
+@limiter.limit('2 per 10 minutes', key_func=_rate_limit_key)
 def run_automation():
     global _run_active
     data = request.json or {}
@@ -1912,8 +2130,6 @@ def run_automation():
 
     month_name_thai = _month_name_thai_from_sheet(sheet_name)
     groups = _group_records_by_tambon(records, tambon, role)
-    shot_prefix = f"err_{uuid.uuid4().hex[:10]}"
-
     def event_stream():
         global _run_active
         q = queue.Queue()
@@ -1957,18 +2173,19 @@ def run_automation():
 
                         for idx, rec in indexed_recs:
                             try:
-                                _fill_record_row(page, rec, idx, q, shot_prefix)
+                                _fill_record_row(page, rec, idx, q)
                             except Exception as e_row:
                                 q.put({"type": "row_status", "index": idx, "status": "error",
                                        "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
                                 try:
-                                    shot_name = f"{shot_prefix}_{idx}.png"
-                                    shot_path = os.path.join(BASE_DIR, "static", shot_name)
-                                    page.screenshot(path=shot_path)
-                                    q.put({"type": "screenshot", "url": f"/static/{shot_name}"})
+                                    # Keep diagnostic screenshots transient and server-side only.
+                                    # Never publish portal screenshots under /static.
+                                    page.screenshot()
+                                    q.put({"type": "screenshot", "available": False,
+                                           "message": "ซ่อนภาพหน้าจอเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล"})
                                     q.put({"type": "diagnostics", "index": idx, "details": _page_diagnostics(page)})
                                 except Exception as screenshot_exc:
-                                    q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {screenshot_exc}"})
+                                    q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {type(screenshot_exc).__name__}"})
                                 try:
                                     if page.locator('#bizModal_402').is_visible():
                                         page.keyboard.press('Escape')

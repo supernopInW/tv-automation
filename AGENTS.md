@@ -303,3 +303,28 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - API responses ตั้ง `Cache-Control: no-store` เพื่อลดการ cache ข้อมูลแผนงานและผลลัพธ์ที่อาจมีข้อมูลส่วนบุคคล.
 - ใช้ `CSP_ENFORCE=1` เพื่อเปลี่ยนเป็น `Content-Security-Policy` แบบบังคับได้ภายหลัง แต่ห้ามเปิดจนกว่าจะย้าย inline event handlers, inline style attributes และ JSON-LD inline script หรือปรับให้ใช้ nonce/hash/external files แล้วตรวจ browser violations ครบ.
 - เพิ่ม `test_security_headers.py` และผูกเข้า Security Gate; CSP unit test, existing Workflow 26 tests, credential cleanup test, py_compile, node syntax check และ git diff check ผ่านใน sandbox.
+
+
+## 22. Access Boundary, Upload Hardening และ Private Artifacts (2026-08-15)
+
+- เพิ่ม `Flask-Limiter[redis]==4.1.1` ใน `requirements.txt` เพื่อให้ rate limiting ใช้งานได้ทั้ง memory storage สำหรับ development และ Redis storage สำหรับ production.
+- เพิ่ม application authentication boundary แบบ opt-in ผ่าน `APP_AUTH_REQUIRED=1`; เมื่อเปิดใช้งานต้อง login ผ่าน `/api/auth/login` และ protected API ที่ไม่มี session จะตอบกลับโดยไม่เปิดเผยรายละเอียดภายใน. ค่าเริ่มต้น `APP_AUTH_REQUIRED=0` เพื่อคงพฤติกรรมเดิม.
+- เพิ่ม session cookie hardening, CSRF token สำหรับ mutation requests และ rate limits สำหรับ login, upload, records, add-row และ run automation. ห้ามบันทึก password, T&V username หรือ Gemini API key ลง Web Storage.
+- Upload ใช้ opaque `upload_id`, ตรวจ extension และ magic bytes/ZIP structure, จำกัดขนาด, ผูก owner กับ session และล้างตาม TTL. ห้ามใช้ชื่อไฟล์จาก client เป็น path โดยตรง.
+- Portal screenshots ห้ามเขียนลง `static/` หรือเผยแพร่ผ่าน URL สาธารณะ; diagnostics ที่ส่งผ่าน SSE ต้องเป็นข้อความที่จำเป็นเท่านั้น และ frontend ต้องไม่โหลด URL screenshot ที่ไม่ได้รับอนุญาต.
+- ระหว่าง security validation ห้ามกด Draft/Submit T&V และห้ามใช้ credential จริงใน CI. ก่อน merge ต้องผ่าน syntax checks, offline regression tests, security tests, dependency audit, SAST และ secret scan.
+- สถานะรอบนี้: แก้ source และ dependency แล้ว; ต้องเพิ่ม/ยืนยัน regression tests, รัน validation, ตรวจ diff และจึงค่อย commit/push/เปิด PR. ยังไม่เปลี่ยน `main` หรือ Render production.
+
+---
+
+*อัปเดตล่าสุด: security/access-upload-hardening; โปรดตรวจสถานะ branch และ test result ก่อน deploy ทุกครั้ง.*
+
+
+## 23. Security Follow-up Validation (2026-08-15)
+
+- ปิดเส้นทาง artifact ใน `automate_submission.py` เพิ่มเติม: error screenshot ถูกจับไว้ใน memory ชั่วคราวเท่านั้น และลบการเขียน modal HTML ลง path คงที่ของเครื่องผู้พัฒนา.
+- ปรับ `_upload_owner_key()` ให้ผู้ใช้ anonymous ผูก upload กับ token แบบสุ่มใน signed session แทนการใช้ IP เพียงอย่างเดียว เพื่อไม่ให้ผู้ใช้หลายรายที่อยู่หลัง NAT/proxy เดียวกันเข้าถึง upload ของกันและกัน.
+- ปรับ `static/app.js` ให้ Gemini API key ไม่ถูกอ่านจากหรือเขียนลง Web Storage รวมถึงล้าง legacy key ที่อาจค้างอยู่ และให้ใช้ค่าใน input memory-only ระหว่างการอ่าน Excel เท่านั้น.
+- เพิ่ม regression assertions สำหรับการไม่อ่าน/เขียน T&V username/password และ Gemini key จาก Web Storage รวมถึงการไม่เขียน screenshot หรือ modal HTML ลงดิสก์.
+- เพิ่ม `node --check static/auth.js` ใน Security Gate. Local CI-equivalent checks, Python/JavaScript syntax, dependency audit (`pip-audit`) และ offline regression tests ผ่านแล้ว; Semgrep แบบ baseline ของ `main` ไม่พบ finding ใหม่ ขณะที่ full scan ยังรายงาน legacy `innerHTML` sinks เดิมตามที่ baseline rule ออกแบบไว้.
+- สถานะยังเป็น pre-PR: ต้อง stage ตรวจ diff/secret scan, commit, push branch, เปิด Pull Request และรอ Security Gate ก่อน merge หรือ deploy.

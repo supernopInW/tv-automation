@@ -198,11 +198,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    const savedKey = localStorage.getItem('gemini_api_key') || '';
-    document.getElementById('gemini-api-key').value = savedKey;
-    document.getElementById('gemini-api-key').addEventListener('input', (e) => {
-        localStorage.setItem('gemini_api_key', e.target.value.trim());
-    });
+    // Gemini API keys are memory-only; never persist them in Web Storage.
+    const apiKeyInput = document.getElementById('gemini-api-key');
+    if (apiKeyInput) apiKeyInput.value = '';
+    try {
+        localStorage.removeItem('gemini_api_key');
+    } catch (_storageError) {
+        // Ignore storage access failures; the key remains memory-only.
+    }
 
     const savedApprover = localStorage.getItem('tv_approver') || '';
     if (savedApprover) document.getElementById('approver').value = savedApprover;
@@ -210,19 +213,11 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.setItem('tv_approver', e.target.value.trim());
     });
 
-    // Username: localStorage only (each person uses their own T&V account)
-    const savedUsername = localStorage.getItem('tv_username') || '';
-    if (savedUsername) document.getElementById('username').value = savedUsername;
-    document.getElementById('username').addEventListener('input', (e) => {
-        localStorage.setItem('tv_username', e.target.value.trim());
-    });
-
-    // Password: sessionStorage only — never localStorage, never hardcoded
-    const savedPassword = sessionStorage.getItem('tv_password') || '';
-    if (savedPassword) document.getElementById('password').value = savedPassword;
-    document.getElementById('password').addEventListener('input', (e) => {
-        sessionStorage.setItem('tv_password', e.target.value);
-    });
+    // T&V credentials are memory-only and are never persisted in Web Storage.
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
 
     const savedRole = localStorage.getItem('tv_role') || 'officer';
     document.getElementById('role-select').value = savedRole;
@@ -2252,7 +2247,7 @@ function loadRecords(sheetName) {
     currentPlanMonth = '';
     const rowCountEl = document.getElementById('row-count');
     rowCountEl.textContent = 'กำลังโหลดตาราง...';
-    const apiKey = localStorage.getItem('gemini_api_key') || '';
+    const apiKey = (document.getElementById('gemini-api-key')?.value || '').trim();
     const office = document.getElementById('office-name').value.trim();
     const tambon = document.getElementById('tambon').value.trim();
     const qs = new URLSearchParams({
@@ -3264,8 +3259,23 @@ function handleSSEMessage(data, totalCount, uiIndexMap = null) {
     } else if (data.type === 'screenshot') {
         const container = document.getElementById('error-container');
         const img = document.getElementById('error-img');
-        img.src = `${data.url}?t=${new Date().getTime()}`;
+        let message = document.getElementById('error-screenshot-message');
+        if (!message) {
+            message = document.createElement('p');
+            message.id = 'error-screenshot-message';
+            message.className = 'error-screenshot-message';
+            container.appendChild(message);
+        }
         container.style.display = 'block';
+        if (data.available && data.url) {
+            img.src = `${data.url}?t=${new Date().getTime()}`;
+            img.hidden = false;
+            message.textContent = '';
+        } else {
+            img.removeAttribute('src');
+            img.hidden = true;
+            message.textContent = data.message || 'ภาพหน้าจอถูกซ่อนเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล';
+        }
     }
 }
 
