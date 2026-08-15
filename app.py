@@ -17,6 +17,44 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
 
+# Strict CSP is shipped in Report-Only mode first because the legacy template
+# still contains inline event handlers, inline style attributes, and JSON-LD.
+# Set CSP_ENFORCE=1 only after the browser violation inventory is remediated.
+CSP_ENFORCE = os.getenv('CSP_ENFORCE', '').strip().lower() in {'1', 'true', 'yes'}
+CSP_POLICY = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "frame-src 'none'; "
+    "form-action 'self'; "
+    "script-src 'self'; "
+    "script-src-attr 'none'; "
+    "style-src 'self' https://fonts.googleapis.com; "
+    "style-src-attr 'none'; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "worker-src 'self' blob:; "
+    "manifest-src 'self'; "
+    "media-src 'none'"
+)
+CSP_HEADER_NAME = 'Content-Security-Policy' if CSP_ENFORCE else 'Content-Security-Policy-Report-Only'
+
+
+@app.after_request
+def add_security_headers(response):
+    """Attach browser hardening headers without logging request credentials."""
+    response.headers[CSP_HEADER_NAME] = CSP_POLICY
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
 # Ensure directories exist
 os.makedirs('static', exist_ok=True)
 os.makedirs('templates', exist_ok=True)

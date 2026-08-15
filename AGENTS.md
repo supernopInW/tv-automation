@@ -294,3 +294,12 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - ก่อนเปิดใช้งานจริงต้องให้ workflow ทำงานใน Pull Request สำเร็จ, ตั้ง Branch Protection/Ruleset ของ `main` ให้ required check เป็น `Security Gate`, และตั้ง Render เป็น `After CI Checks Pass` หรือปิด auto-deploy แล้วใช้ deploy hook ที่เก็บใน GitHub Secret.
 - ห้ามกด Draft/Submit T&V ระหว่าง security/CI test และห้ามใช้ production credential ใน job ทดสอบ.
 - ผล pre-commit validation รอบแรก: security workflow structure, py_compile, node syntax, Select2 readiness tests, Workflow 26 hardening tests, credential cleanup unit test และ git diff check ผ่านแบบ offline; ยังไม่ได้ push หรือ deploy.
+
+
+## 21. Content Security Policy และ Browser Hardening (2026-08-15)
+
+- เพิ่ม CSP แบบ Report-Only ใน `app.py` ผ่าน `Content-Security-Policy-Report-Only` โดยนโยบายอนุญาตเฉพาะ same-origin scripts/connections, Google Fonts ที่จำเป็น, data/blob image ตามการใช้งาน และปิด object/embed, frame, inline script attributes และ inline style attributes.
+- เพิ่ม `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` แบบปิดกล้อง/ไมโครโฟน/geolocation/payment/USB และ HSTS.
+- API responses ตั้ง `Cache-Control: no-store` เพื่อลดการ cache ข้อมูลแผนงานและผลลัพธ์ที่อาจมีข้อมูลส่วนบุคคล.
+- ใช้ `CSP_ENFORCE=1` เพื่อเปลี่ยนเป็น `Content-Security-Policy` แบบบังคับได้ภายหลัง แต่ห้ามเปิดจนกว่าจะย้าย inline event handlers, inline style attributes และ JSON-LD inline script หรือปรับให้ใช้ nonce/hash/external files แล้วตรวจ browser violations ครบ.
+- เพิ่ม `test_security_headers.py` และผูกเข้า Security Gate; CSP unit test, existing Workflow 26 tests, credential cleanup test, py_compile, node syntax check และ git diff check ผ่านใน sandbox.
