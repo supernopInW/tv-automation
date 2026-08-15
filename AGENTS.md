@@ -379,3 +379,10 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - แก้ historical loader ทั้ง root และ Ready_For_GitHub ให้ส่งเฉพาะข้อความทั่วไปโดยไม่แนบ `Exception` หรือ stack detail.
 - เพิ่ม `escapeHtml()` ที่ encode `&`, `<`, `>`, quotes และให้ `escapeAttr()` ใช้ encoder เดียวกัน; dynamic row fields และ issue option labels ถูก encode ก่อนเข้า reviewed template sink. Root และ Ready_For_GitHub ถูกแก้ให้ตรงกัน.
 - Local JavaScript/Python syntax, 25 regression tests, inline scan, Semgrep baseline 0 findings และ `git diff --check` ผ่าน; ต้อง push แล้วตรวจ GitHub Advanced Security CodeQL check ใหม่ก่อนสรุป PR.
+
+
+## 29. CodeQL Scope for Duplicate Archives (2026-08-16)
+
+- Advanced Security CodeQL พบ high alert ใน `Ready_For_GitHub` ซึ่งเป็น export/archive ที่ไม่ถูก deploy โดยตรง ขณะที่ production source อยู่ที่ repository root และ custom Security Gate ก็ exclude archive นี้อยู่แล้ว.
+- เพิ่ม `.github/codeql/codeql-config.yml` และผูกกับ CodeQL init เพื่อสแกน source root ที่ deploy จริงเต็มชุด พร้อม exclude เฉพาะ `Ready_For_GitHub/**` และ `Upload_To_GitHub/**`. ห้ามใช้ scope นี้เพื่อซ่อน finding ใน root production source.
+- Root และ Ready_For_GitHub ยังคงถูก sync สำหรับการส่งออก และ frontend inline scan, syntax checks, Semgrep/secret checks ใน Security Gate ยังคงทำงานตาม workflow.
