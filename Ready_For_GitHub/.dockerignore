@@ -8,6 +8,11 @@ static/err_*.png
 static/error_screenshot.png
 *.xls
 *.xlsx
+# Historical workbooks are read at runtime to weight random VISITING
+# activities. Keep only these checked-in reference files in the image; uploads
+# remain excluded by the uploads/ rule above.
+!แผนเดือนพค69.xls
+!ตัวอย่างแผนงาน_มิย69.xlsx
 .env
 .env.*
 scripts/_sample_village.json

@@ -58,8 +58,36 @@ const activityOptions = {
 };
 
 let allRecords = [];
+let historicalActivityPool = [];
+let historicalActivityPoolLoaded = false;
 let selectedFile = null;
 let tempFilename = '';
+// Tracks the month selected by the web-based plan generator.
+// This must take precedence over the Excel sheet selector when submitting.
+let currentPlanMonth = '';
+
+const thaiPlanMonthAbbr = [
+    'มค', 'กพ', 'มีค', 'เมย', 'พค', 'มิย',
+    'กค', 'สค', 'กย', 'ตค', 'พย', 'ธค'
+];
+
+function planMonthToSheetName(planMonth) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(planMonth || ''));
+    if (!match) return '';
+    const month = parseInt(match[2], 10);
+    if (month < 1 || month > 12) return '';
+    const yearBeShort = String(parseInt(match[1], 10) + 543).slice(-2);
+    return `${thaiPlanMonthAbbr[month - 1]}${yearBeShort}`;
+}
+
+function inferPlanMonthFromRecords() {
+    const rec = allRecords.find(item => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(item.date || '')));
+    if (!rec) return '';
+    const [day, month, yearBeText] = String(rec.date).split('/').map(Number);
+    const year = yearBeText >= 2400 ? yearBeText - 543 : yearBeText;
+    if (!day || month < 1 || month > 12 || !year) return '';
+    return `${year}-${String(month).padStart(2, '0')}`;
+}
 let locationPresets = [{ value: "_custom", label: "กำหนดเอง..." }];
 /** Cache villages by tambon_code for per-row linking */
 const rowVillageCache = {};
@@ -126,6 +154,37 @@ function getRandomFieldTargetCount() {
     return pool[randIdx];
 }
 
+// T&V credentials are needed only for the current run. The username has
+// historically been stored in localStorage, while the password is in
+// sessionStorage; clear both locations and the visible fields after the run.
+function clearTandVCredentials() {
+    try {
+        localStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_password');
+    } catch (storageError) {
+        // Do not expose credential values if browser storage is unavailable.
+        console.warn('ไม่สามารถล้างข้อมูลรับรอง T&V จาก browser storage ได้', storageError);
+    }
+
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
+}
+
+// Return a one-shot cleanup callback for the end of one Playwright run.
+// The guard prevents duplicate cleanup when both stream completion and an
+// error handler observe the same run ending.
+function createRunCredentialCleanup() {
+    let credentialsCleared = false;
+    return () => {
+        if (credentialsCleared) return;
+        credentialsCleared = true;
+        clearTandVCredentials();
+    };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initMooMultiSelect();
     initVillageMultiSelect();
@@ -146,8 +205,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // T&V credentials are memory-only and are never persisted in Web Storage.
-    document.getElementById('username').value = '';
-    document.getElementById('password').value = '';
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
 
     const savedRole = localStorage.getItem('tv_role') || 'officer';
     document.getElementById('role-select').value = savedRole;
@@ -809,8 +870,8 @@ function rebuildMooPanel() {
     const pool = moosFromVillages(geoState.villages);
     const extras = geoState.moos.filter(m => !pool.includes(m));
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล${geoState.tambonName || ''} (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">เลือกตำบลก่อน — จะแสดงเฉพาะหมู่ที่มีจริง</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล${geoState.tambonName || ''} (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header">เลือกตำบลก่อน — จะแสดงเฉพาะหมู่ที่มีจริง</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> หมู่ ${escapeAttr(v)}</label>`;
     });
@@ -858,7 +919,7 @@ function rebuildVillagePanel() {
     const selected = new Set(geoState.selectedVillages);
     const list = geoState.villages || [];
     if (!list.length) {
-        panel.innerHTML = '<div class="multi-select-option" style="cursor:default;opacity:0.7;">ยังไม่มีรายการ — พิมพ์เพิ่มด้านล่าง</div>';
+        panel.innerHTML = '<div class="multi-select-option csp-empty-multi-option">ยังไม่มีรายการ — พิมพ์เพิ่มด้านล่าง</div>';
         return;
     }
     let html = list.map(v => {
@@ -1701,7 +1762,7 @@ async function renderPlaceBuilder(rowIdx) {
         <button type="button" class="btn-place-add-all" id="place-add-all-${rowIdx}" ${tambonCount ? '' : 'disabled'} title="ใส่ทุกตำบลในอำเภอ (ไม่สุ่มหมู่)">+ ทุกตำบล</button>
         <button type="button" class="btn-place-random-moo" id="place-random-moo-${rowIdx}" ${coverAll || !tambonCount ? 'disabled' : ''} title="สุ่ม 2–4 หมู่ จากหมู่บ้านจริงของตำบลที่รับผิดชอบ">สุ่มหมู่ 2–4</button>
         ${isMultiTambonRole() ? `<label class="row-use-all-tambons multi-tambon-only" title="ขยายส่งทีละตำบลในหัวแผน T&V">
-            <input type="checkbox" id="use-all-tambons-${rowIdx}" ${rec.useAllTambons ? 'checked' : ''} onchange="syncRowUseAllTambonsUi(${rowIdx})">
+            <input type="checkbox" id="use-all-tambons-${rowIdx}" ${rec.useAllTambons ? 'checked' : ''} data-csp-change="syncRowUseAllTambonsUi" data-csp-row-index="${rowIdx}">
             ขยายทีละตำบล
         </label>` : ''}
     </div>`;
@@ -1817,8 +1878,8 @@ async function rebuildPlaceMooPanel(rowIdx, partIdx) {
         }
     }
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล${tb} (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:#fbbf24;">ยังไม่มีข้อมูลหมู่บ้านของตำบลนี้</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล${tb} (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header csp-multi-header-warning">ยังไม่มีข้อมูลหมู่บ้านของตำบลนี้</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> ม.${escapeAttr(v)}</label>`;
     });
@@ -1863,7 +1924,7 @@ async function togglePlaceMooPanel(rowIdx, partIdx) {
     const panel = document.querySelector(`#place-builder-${rowIdx} .place-moo-panel[data-part="${partIdx}"]`);
     if (!panel) return;
     panel.hidden = false;
-    panel.innerHTML = '<div style="padding:0.35rem;font-size:0.75rem;color:var(--text-muted);">กำลังโหลดหมู่บ้าน...</div>';
+    panel.innerHTML = '<div class="csp-loading-option">กำลังโหลดหมู่บ้าน...</div>';
     await rebuildPlaceMooPanel(rowIdx, partIdx);
     panel.hidden = false;
 }
@@ -1968,13 +2029,13 @@ function rebuildRowMooPanel(rowIdx) {
         return `<label class="multi-select-option"><input type="checkbox" data-kind="village" value="${escapeAttr(name)}" data-moo="${escapeAttr(v.moo || '')}" ${checked}> ${escapeAttr(label)}</label>`;
     }).join('');
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">ยังไม่มีข้อมูลหมู่บ้าน</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header">ยังไม่มีข้อมูลหมู่บ้าน</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" data-kind="moo" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> ม.${escapeAttr(v)}</label>`;
     });
     if (villageOpts) {
-        html += '<div style="padding:0.35rem 0.45rem 0.15rem;font-size:0.72rem;color:var(--text-muted);border-top:1px solid rgba(148,163,184,0.2);margin-top:0.2rem;">หมู่บ้าน</div>';
+        html += '<div class="csp-village-header">หมู่บ้าน</div>';
         html += villageOpts;
     }
     html += `<div class="multi-select-actions">
@@ -2173,6 +2234,8 @@ function onSheetChange() {
 }
 
 function loadRecords(sheetName) {
+    // Loading an Excel sheet switches month authority back to the sheet selector.
+    currentPlanMonth = '';
     const rowCountEl = document.getElementById('row-count');
     rowCountEl.textContent = 'กำลังโหลดตาราง...';
     const office = document.getElementById('office-name').value.trim();
@@ -2279,13 +2342,13 @@ function renderTable(records) {
         const tambonVal = rec.tambon || geoState.tambonName || '';
         const useAll = !!rec.useAllTambons;
         tr.innerHTML = `
-            <td class="text-center" style="font-weight: 700; color: var(--text-muted);">${rec.id}</td>
+            <td class="text-center csp-row-index">${rec.id}</td>
             <td class="row-date-col">
-                <input type="text" class="cell-input" id="date-${idx}" value="${rec.date || ''}" style="text-align: center;" title="${rec.date || ''}" onchange="onRowDateChanged(${idx})">
+                <input type="text" class="cell-input csp-date-input" id="date-${idx}" value="${rec.date || ''}" title="${rec.date || ''}" data-csp-change="onRowDateChanged" data-csp-row-index="${idx}">
             </td>
             <td class="row-issue-col">
                 <div class="cell-stack">
-                    <select class="cell-input cell-select" id="issue-${idx}" onchange="onIssueChange(${idx}); syncSelectFulltext('issue-${idx}')">
+                    <select class="cell-input cell-select" id="issue-${idx}" data-csp-change="onIssueChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="issue-${idx}">
                         ${issueOptionsHtml}
                     </select>
                     <div class="cell-fulltext" id="issue-${idx}-fulltext"></div>
@@ -2293,15 +2356,15 @@ function renderTable(records) {
             </td>
             <td class="row-activity-col">
                 <div class="cell-stack">
-                    <select class="cell-input cell-select" id="activity-select-${idx}" onchange="syncSelectFulltext('activity-select-${idx}')"></select>
+                    <select class="cell-input cell-select" id="activity-select-${idx}" data-csp-change="syncSelectFulltext" data-csp-target-id="activity-select-${idx}"></select>
                     <div class="cell-fulltext" id="activity-select-${idx}-fulltext"></div>
                 </div>
             </td>
             <td class="row-details-col">
                 <div class="desc-combo">
-                    <select class="cell-input cell-select" id="desc-select-${idx}" onchange="onDescChange(${idx}); syncSelectFulltext('desc-select-${idx}')"></select>
+                    <select class="cell-input cell-select" id="desc-select-${idx}" data-csp-change="onDescChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="desc-select-${idx}"></select>
                     <div class="cell-fulltext" id="desc-select-${idx}-fulltext"></div>
-                    <textarea class="cell-input" id="activity-${idx}" style="min-height: 64px; resize: vertical; display: none;" placeholder="พิมพ์รายละเอียด...">${rec.activity || ''}</textarea>
+                    <textarea class="cell-input csp-activity-textarea" id="activity-${idx}" placeholder="พิมพ์รายละเอียด...">${rec.activity || ''}</textarea>
                 </div>
             </td>
             <td class="row-location-col">
@@ -2316,7 +2379,7 @@ function renderTable(records) {
                 <span class="status-badge badge-ready">พร้อมกรอก</span>
             </td>
             <td class="row-action-col text-center">
-                <button class="btn-delete-row" onclick="deleteRow(${idx})" title="ลบแถวนี้">🗑️</button>
+                <button class="btn-delete-row" data-csp-action="deleteRow" data-csp-row-index="${idx}" title="ลบแถวนี้">🗑️</button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -2684,6 +2747,7 @@ async function createBlankPlanOnWeb() {
     const today = new Date();
     const currentMonth = today.getMonth() + 1;
     const currentYearBe = today.getFullYear() + 543;
+    currentPlanMonth = `${today.getFullYear()}-${String(currentMonth).padStart(2, '0')}`;
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
 
@@ -2733,6 +2797,7 @@ async function generateMonthScheduleOnWeb() {
     const month = today.getMonth();
     const yearBe = year + 543;
     const monthStr = String(month + 1).padStart(2, '0');
+    currentPlanMonth = `${year}-${monthStr}`;
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
 
@@ -2831,6 +2896,7 @@ function clearPlanTable() {
         'คุณต้องการล้างรายการแผนงานทั้งหมดในตารางใช่หรือไม่?',
         () => {
             allRecords = [];
+            currentPlanMonth = '';
             renderTable(allRecords);
             updateQuickStats();
             addLog('info', 'ล้างข้อมูลตารางเรียบร้อยแล้ว');
@@ -3023,6 +3089,7 @@ function executeAutomation() {
     const startBtn = document.getElementById('start-btn');
     const logStatus = document.getElementById('log-status');
     const errorContainer = document.getElementById('error-container');
+    let completionConfirmed = false;
 
     errorContainer.style.display = 'none';
     startBtn.disabled = true;
@@ -3039,10 +3106,14 @@ function executeAutomation() {
         return;
     }
 
+    const autoPlanMonth = currentPlanMonth || inferPlanMonthFromRecords();
+    const runSheet = autoPlanMonth
+        ? planMonthToSheetName(autoPlanMonth)
+        : document.getElementById('sheet-select').value;
     const payload = {
         username: document.getElementById('username').value.trim(),
         password: document.getElementById('password').value,
-        sheet: document.getElementById('sheet-select').value,
+        sheet: runSheet,
         tambon: document.getElementById('tambon').value.trim() || (built.expandList[0] || ''),
         role: geoState.role,
         office_name: document.getElementById('office-name').value.trim(),
@@ -3060,6 +3131,7 @@ function executeAutomation() {
     };
 
     const uiIndexMap = built.uiIndexMap;
+    const clearRunCredentials = createRunCredentialCleanup();
     allRecords.forEach((_, idx) => updateRowStatus(idx, 'ready'));
 
     let modeLabel = 'Dry-run (ทดสอบ)';
@@ -3094,9 +3166,16 @@ function executeAutomation() {
         function processStream() {
             reader.read().then(({ done, value }) => {
                 if (done) {
+                    clearRunCredentials();
                     startBtn.disabled = false;
-                    logStatus.textContent = 'FINISHED';
-                    logStatus.style.color = 'var(--success)';
+                    if (completionConfirmed) {
+                        logStatus.textContent = 'FINISHED';
+                        logStatus.style.color = 'var(--success)';
+                    } else {
+                        logStatus.textContent = 'UNKNOWN';
+                        logStatus.style.color = 'var(--warning)';
+                        addLog('warning', 'การเชื่อมต่อจบลงโดยไม่มีสัญญาณยืนยันผลลัพธ์จากเซิร์ฟเวอร์ กรุณาตรวจสอบพอร์ทัลก่อนเริ่มใหม่');
+                    }
                     return;
                 }
                 buffer += decoder.decode(value, { stream: true });
@@ -3106,6 +3185,7 @@ function executeAutomation() {
                     if (line.startsWith('data: ')) {
                         try {
                             const data = JSON.parse(line.slice(6));
+                            if (data.type === 'done') completionConfirmed = true;
                             handleSSEMessage(data, payload.records.length, uiIndexMap);
                         } catch (e) {
                             console.error(e);
@@ -3113,11 +3193,18 @@ function executeAutomation() {
                     }
                 });
                 processStream();
+            }).catch(err => {
+                clearRunCredentials();
+                addLog("error", `การอ่านผลการทำงานผิดพลาด: ${err.message || err}`);
+                startBtn.disabled = false;
+                logStatus.textContent = 'ERROR';
+                logStatus.style.color = 'var(--error)';
             });
         }
         processStream();
     })
     .catch(err => {
+        clearRunCredentials();
         addLog("error", `การรันผิดพลาด: ${err.message || err}`);
         startBtn.disabled = false;
         logStatus.textContent = 'ERROR';
@@ -3132,6 +3219,9 @@ function handleSSEMessage(data, totalCount, uiIndexMap = null) {
         addLog('error', data.message);
     } else if (data.type === 'done') {
         addLog('success', data.message);
+    } else if (data.type === 'diagnostics') {
+        const details = data.details || {};
+        addLog('warning', `Diagnostics แถว ${data.index ?? '-'}: ${details.url || details.diagnostics_error || 'ไม่พบรายละเอียด'}`);
     } else if (data.type === 'row_status') {
         const payloadIdx = data.index;
         const idx = Array.isArray(uiIndexMap) && uiIndexMap[payloadIdx] != null
@@ -3159,8 +3249,23 @@ function handleSSEMessage(data, totalCount, uiIndexMap = null) {
     } else if (data.type === 'screenshot') {
         const container = document.getElementById('error-container');
         const img = document.getElementById('error-img');
-        img.src = `${data.url}?t=${new Date().getTime()}`;
+        let message = document.getElementById('error-screenshot-message');
+        if (!message) {
+            message = document.createElement('p');
+            message.id = 'error-screenshot-message';
+            message.className = 'error-screenshot-message';
+            container.appendChild(message);
+        }
         container.style.display = 'block';
+        if (data.available && data.url) {
+            img.src = `${data.url}?t=${new Date().getTime()}`;
+            img.hidden = false;
+            message.textContent = '';
+        } else {
+            img.removeAttribute('src');
+            img.hidden = true;
+            message.textContent = data.message || 'ภาพหน้าจอถูกซ่อนเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล';
+        }
     }
 }
 
@@ -3288,7 +3393,7 @@ function renderHolidayDaysGrid() {
         if (isWeekend) classes += ' is-weekend';
         if (isHoliday) classes += ' is-holiday';
 
-        const clickHandler = isWeekend ? '' : `onclick="toggleHolidayDay(${d})"`;
+        const clickHandler = isWeekend ? '' : `data-csp-action="toggleHolidayDay" data-csp-day="${d}"`;
 
         html += `
             <button type="button" class="${classes}" ${clickHandler} title="${d} (วัน${dayShortNames[dayOfWeek]})">
@@ -3352,7 +3457,7 @@ function updateHolidayHintText() {
     if (!hint) return;
     const list = Array.from(selectedHolidaysSet).sort((a, b) => a - b);
     if (list.length > 0) {
-        hint.innerHTML = `วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · <strong style="color:#fca5a5;">เลือกวันหยุดแล้ว (${list.length} วัน): วันที่ ${list.join(', ')}</strong>`;
+        hint.innerHTML = `วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · <strong class="csp-holiday-selected">เลือกวันหยุดแล้ว (${list.length} วัน): วันที่ ${list.join(', ')}</strong>`;
     } else {
         hint.textContent = 'วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · คลิกที่ตัวเลขเพื่อเลือกวันหยุดนักขัตฤกษ์/วันหยุดพิเศษ/วันลาเพิ่มเติม';
     }
@@ -3370,6 +3475,47 @@ const randomActivityPool = [
     { issue_val: "2", activity_val: "17", activity: "การบริหารจัดการพื้นที่เกษตรกรรมตามแผนที่ Agri-Map" },
     { issue_val: "2", activity_val: "21", activity: "การส่งเสริมการทำเกษตรตามแนวทางเกษตรทฤษฎีใหม่" }
 ];
+
+async function loadHistoricalActivityPool() {
+    if (historicalActivityPoolLoaded) return historicalActivityPool;
+
+    try {
+        const response = await fetch('/api/historical-activities');
+        const payload = await response.json();
+        historicalActivityPool = Array.isArray(payload.activities)
+            ? payload.activities.filter(item =>
+                item &&
+                String(item.issue_val) === '2' &&
+                String(item.activity_val || '').trim() &&
+                String(item.activity || '').trim()
+            )
+            : [];
+        historicalActivityPoolLoaded = true;
+        return historicalActivityPool;
+    } catch (error) {
+        historicalActivityPoolLoaded = true;
+        historicalActivityPool = [];
+        addLog('warning', 'โหลดคลังกิจกรรมจาก Excel เก่าไม่สำเร็จ');
+        return historicalActivityPool;
+    }
+}
+
+function pickWeightedActivity(pool) {
+    const candidates = Array.isArray(pool) && pool.length ? pool : randomActivityPool;
+    const totalWeight = candidates.reduce((sum, item) => {
+        const weight = Number(item?.weight);
+        return sum + (Number.isFinite(weight) && weight > 0 ? weight : 1);
+    }, 0);
+    let cursor = Math.random() * totalWeight;
+
+    for (const item of candidates) {
+        const weight = Number(item?.weight);
+        cursor -= Number.isFinite(weight) && weight > 0 ? weight : 1;
+        if (cursor < 0) return item;
+    }
+
+    return candidates[candidates.length - 1];
+}
 
 async function generateAutoMonthPlanFromWebUI() {
     const tbs = [...getResponsibleTambonSet()];
@@ -3390,11 +3536,25 @@ async function generateAutoMonthPlanFromWebUI() {
     const [yearStr, monthStr] = monthSel.split('-');
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10) - 1; // 0-indexed
+    currentPlanMonth = monthSel;
     const yearBe = year + 543;
     const monthFormattedStr = String(month + 1).padStart(2, '0');
 
-    const randomizeActivities = !!document.getElementById('opt-randomize-activities')?.checked;
     const randomizeVillages = !!document.getElementById('opt-randomize-villages-auto')?.checked;
+    const historicalPool = await loadHistoricalActivityPool();
+    const activitySourcePool = historicalPool.length
+        ? historicalPool
+        : randomActivityPool;
+    const shouldRandomizeActivities = activitySourcePool.length > 0;
+
+    if (historicalPool.length > 0) {
+        addLog(
+            'info',
+            `สุ่มกิจกรรมเยี่ยมเยียนจากคลัง Excel เก่า ${historicalPool.length} รูปแบบ โดยให้น้ำหนักตามจำนวนครั้งที่พบ`
+        );
+    } else {
+        addLog('warning', 'ไม่พบกิจกรรมเยี่ยมเยียนจาก Excel เก่า จึงใช้รายการกิจกรรมสำรองของระบบ');
+    }
 
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
@@ -3451,9 +3611,8 @@ async function generateAutoMonthPlanFromWebUI() {
                 activity: 'การเยี่ยมเยียนส่งเสริมการเกษตรและถ่ายทอดความรู้'
             };
 
-            if (randomizeActivities) {
-                const randIdx = Math.floor(Math.random() * randomActivityPool.length);
-                chosenAct = randomActivityPool[randIdx];
+            if (shouldRandomizeActivities) {
+                chosenAct = pickWeightedActivity(activitySourcePool);
             }
 
             const randTarget = getRandomFieldTargetCount(); // สุ่มจาก [20, 30, 50, 60] คน
@@ -3473,7 +3632,7 @@ async function generateAutoMonthPlanFromWebUI() {
                 co_workers: '',
                 issue_val: chosenAct.issue_val,
                 activity_val: chosenAct.activity_val,
-                other_text: '',
+                other_text: chosenAct.other_text || '',
                 useAllTambons: false
             });
         }

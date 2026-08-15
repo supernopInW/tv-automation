@@ -1,19 +1,271 @@
 import sys
+import io
 import time
 import re
+import hashlib
+import hmac
 import queue
+import secrets
 import threading
-import uuid
+import zipfile
+import tempfile
+from pathlib import Path
+
 import pandas as pd
-from flask import Flask, render_template, jsonify, request, Response, send_from_directory
+from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session, g
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import json
 import os
-from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.security import check_password_hash
 import geo_data
+
+APP_SESSION_SECRET = os.environ.get('APP_SESSION_SECRET', '').strip()
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
+app.config['SECRET_KEY'] = APP_SESSION_SECRET or secrets.token_urlsafe(32)
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_BYTES', str(10 * 1024 * 1024)))
+
+APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '1').strip().lower() in {'1', 'true', 'yes'}
+APP_AUTH_USERNAME = os.environ.get('APP_AUTH_USERNAME', '').strip()
+APP_AUTH_PASSWORD_HASH = os.environ.get('APP_AUTH_PASSWORD_HASH', '').strip()
+APP_AUTH_ROLE = os.environ.get('APP_AUTH_ROLE', 'officer').strip()
+APP_AUTH_OFFICE_NAME = os.environ.get('APP_AUTH_OFFICE_NAME', '').strip()
+APP_AUTH_ALLOWED_TAMBONS = frozenset(
+    item.strip() for item in os.environ.get('APP_AUTH_ALLOWED_TAMBONS', '').split(',') if item.strip()
+)
+APP_AUTH_ALLOWED_APPROVERS = frozenset(
+    item.strip() for item in os.environ.get('APP_AUTH_ALLOWED_APPROVERS', '').split(',') if item.strip()
+)
+APP_AUTH_CAN_SUBMIT = os.environ.get('APP_AUTH_CAN_SUBMIT', '0').strip().lower() in {'1', 'true', 'yes'}
+APP_ENV = os.environ.get('APP_ENV', 'development').strip().lower()
+RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://').strip()
+if APP_ENV in {'production', 'prod'} and RATE_LIMIT_STORAGE_URI.startswith('memory://'):
+    raise RuntimeError('RATELIMIT_STORAGE_URI must be a shared Redis URI in production')
+if APP_ENV in {'production', 'prod'} and APP_AUTH_REQUIRED:
+    if not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET):
+        raise RuntimeError('Production application authentication secrets are not configured')
+    if not (APP_AUTH_ROLE and APP_AUTH_OFFICE_NAME and APP_AUTH_ALLOWED_TAMBONS and APP_AUTH_ALLOWED_APPROVERS):
+        raise RuntimeError('Production authorization profile is not configured')
+if APP_AUTH_REQUIRED and not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET):
+    # Fail closed for protected requests; never use a source-code default.
+    print('APP_AUTH_REQUIRED=1 but authentication secrets are not configured')
+if RATE_LIMIT_STORAGE_URI == 'memory://':
+    print('WARNING: RATELIMIT_STORAGE_URI=memory:// is for development only')
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    storage_uri=RATE_LIMIT_STORAGE_URI,
+    strategy='moving-window',
+    headers_enabled=True,
+)
+
+PROTECTED_API_PATHS = {
+    '/api/add-row', '/api/upload', '/api/sheets', '/api/records',
+    '/api/historical-activities', '/api/run',
+}
+PUBLIC_API_PATHS = {'/api/health', '/api/access/status', '/api/auth/login', '/api/auth/logout', '/api/csp-report'}
+
+UPLOAD_TTL_SECONDS = int(os.environ.get('UPLOAD_TTL_SECONDS', '1800'))
+UPLOAD_REGISTRY = {}
+UPLOAD_REGISTRY_LOCK = threading.Lock()
+ALLOWED_UPLOAD_EXTENSIONS = {'.xls', '.xlsx'}
+OLE_COMPOUND_FILE_HEADER = bytes.fromhex('D0CF11E0A1B11AE1')
+
+
+def _rate_limit_key():
+    """Use the platform-derived remote address after proxy configuration is verified."""
+    return get_remote_address() or 'unknown'
+
+
+def _ensure_csrf_token():
+    token = session.get('csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['csrf_token'] = token
+    return token
+
+
+def _csrf_valid():
+    expected = session.get('csrf_token', '')
+    supplied = request.headers.get('X-CSRF-Token', '')
+    return bool(expected and supplied) and hmac.compare_digest(supplied, expected)
+
+
+def _auth_configured():
+    return bool(APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET)
+
+
+def _app_authenticated():
+    return bool(session.get('app_user'))
+
+
+def _normalize_tambon_name(value):
+    return str(value or '').replace('ตำบล', '').replace('แขวง', '').strip()
+
+
+def _server_auth_profile():
+    return {
+        'username': APP_AUTH_USERNAME,
+        'role': APP_AUTH_ROLE or 'officer',
+        'office_name': APP_AUTH_OFFICE_NAME,
+        'allowed_tambons': APP_AUTH_ALLOWED_TAMBONS,
+        'allowed_approvers': APP_AUTH_ALLOWED_APPROVERS,
+        'can_submit': APP_AUTH_CAN_SUBMIT,
+    }
+
+
+def _auth_profile_configured():
+    return bool(
+        APP_AUTH_ROLE
+        and APP_AUTH_OFFICE_NAME
+        and APP_AUTH_ALLOWED_TAMBONS
+        and APP_AUTH_ALLOWED_APPROVERS
+    )
+
+
+def _validate_run_authorization(data):
+    """Derive automation scope from the server profile when app auth is enabled."""
+    requested_mode = str(data.get('mode', 'dry_run') or 'dry_run').strip()
+    if 'dry_run' in data and requested_mode == 'dry_run' and data.get('dry_run') is False:
+        requested_mode = 'submit'
+    if requested_mode not in {'dry_run', 'draft', 'submit'}:
+        return None, ({'success': False, 'error': 'โหมดการทำงานไม่ถูกต้อง'}, 400)
+
+    if not APP_AUTH_REQUIRED:
+        return {
+            'tambon': data.get('tambon', ''),
+            'role': data.get('role', 'officer'),
+            'office_name': data.get('office_name', ''),
+            'approver': data.get('approver', ''),
+            'mode': requested_mode,
+        }, None
+
+    if not _auth_profile_configured():
+        return None, ({'success': False, 'error': 'ยังไม่ได้ตั้งค่า server-side authorization profile'}, 503)
+
+    profile = _server_auth_profile()
+    requested_tambons = list(data.get('selected_tambons') or [])
+    if not requested_tambons and data.get('tambon'):
+        requested_tambons = [data.get('tambon')]
+    normalized_requested = {_normalize_tambon_name(item) for item in requested_tambons if str(item).strip()}
+    unauthorized_tambons = normalized_requested - {_normalize_tambon_name(item) for item in profile['allowed_tambons']}
+    if not normalized_requested or unauthorized_tambons:
+        return None, ({'success': False, 'error': 'ไม่มีสิทธิ์ใช้พื้นที่ที่ร้องขอ'}, 403)
+
+    requested_approver = str(data.get('approver') or '').strip()
+    if requested_approver not in profile['allowed_approvers']:
+        return None, ({'success': False, 'error': 'ไม่มีสิทธิ์ใช้ผู้อนุมัติที่ร้องขอ'}, 403)
+    if requested_mode == 'submit' and not profile['can_submit']:
+        return None, ({'success': False, 'error': 'บัญชีนี้ไม่มีสิทธิ์ส่งข้อมูลจริง'}, 403)
+
+    for record in data.get('records') or []:
+        record_tambon = _normalize_tambon_name(record.get('tambon') or data.get('tambon'))
+        if record_tambon and record_tambon not in {
+            _normalize_tambon_name(item) for item in profile['allowed_tambons']
+        }:
+            return None, ({'success': False, 'error': 'ข้อมูลแถวมีตำบลนอกสิทธิ์'}, 403)
+
+    return {
+        'tambon': next(iter(normalized_requested)),
+        'role': profile['role'],
+        'office_name': profile['office_name'],
+        'approver': requested_approver,
+        'mode': requested_mode,
+    }, None
+
+
+@app.before_request
+def set_csp_nonce():
+    # A fresh nonce per response authorizes only the JSON-LD script rendered by
+    # the server; all executable JavaScript remains external and same-origin.
+    g.csp_nonce = secrets.token_urlsafe(16)
+
+
+@app.context_processor
+def inject_csp_nonce():
+    return {'csp_nonce': getattr(g, 'csp_nonce', '')}
+
+
+@app.before_request
+def enforce_api_access_boundary():
+    if not request.path.startswith('/api/'):
+        return None
+    if request.path in {'/api/health', '/api/csp-report'}:
+        return None
+    _ensure_csrf_token()
+    if request.path in {'/api/access/status', '/api/auth/login', '/api/auth/logout'}:
+        if request.path != '/api/access/status' and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and not _csrf_valid():
+            return jsonify({'success': False, 'error': 'คำขอไม่ผ่านการตรวจสอบความปลอดภัย'}), 403
+        return None
+    if APP_AUTH_REQUIRED and not _auth_configured():
+        return jsonify({'success': False, 'error': 'ระบบยืนยันตัวตนยังไม่ได้ตั้งค่า'}), 503
+    if APP_AUTH_REQUIRED and not _app_authenticated():
+        return jsonify({'success': False, 'error': 'กรุณาเข้าสู่ระบบแอปก่อนใช้งาน'}), 401
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and not _csrf_valid():
+        return jsonify({'success': False, 'error': 'คำขอไม่ผ่านการตรวจสอบความปลอดภัย'}), 403
+    return None
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_request_too_large(_error):
+    return jsonify({'success': False, 'error': 'ไฟล์หรือคำขอมีขนาดใหญ่เกินกำหนด'}), 413
+
+# CSP is enforced by default in production after the inline-handler/style
+# migration. Development and test remain Report-Only unless explicitly enabled.
+_csp_default = '1' if APP_ENV in {'production', 'prod'} else ''
+CSP_ENFORCE = os.getenv('CSP_ENFORCE', _csp_default).strip().lower() in {'1', 'true', 'yes'}
+CSP_POLICY = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "frame-src 'none'; "
+    "form-action 'self'; "
+    "script-src 'self'; "
+    "script-src-attr 'none'; "
+    "style-src 'self' https://fonts.googleapis.com; "
+    "style-src-attr 'none'; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "worker-src 'self' blob:; "
+    "manifest-src 'self'; "
+    "media-src 'none'"
+)
+CSP_HEADER_NAME = 'Content-Security-Policy' if CSP_ENFORCE else 'Content-Security-Policy-Report-Only'
+
+
+def _csp_policy_for_request():
+    nonce = getattr(g, 'csp_nonce', '')
+    if not nonce:
+        return CSP_POLICY
+    return CSP_POLICY.replace(
+        "script-src 'self';",
+        f"script-src 'self' 'nonce-{nonce}';",
+        1,
+    )
+
+
+@app.after_request
+def add_security_headers(response):
+    """Attach browser hardening headers without logging request credentials."""
+    response.headers[CSP_HEADER_NAME] = _csp_policy_for_request()
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
 
 # Ensure directories exist
 os.makedirs('static', exist_ok=True)
@@ -23,12 +275,233 @@ os.makedirs('docs', exist_ok=True)
 # Global variables and paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_XLS_PATH = os.path.join(BASE_DIR, "แผนเดือนพค69.xls")
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "tv-automation-uploads")
+os.makedirs(UPLOAD_DIR, mode=0o700, exist_ok=True)
+
+
+def _cleanup_expired_uploads():
+    now = time.time()
+    with UPLOAD_REGISTRY_LOCK:
+        expired = [upload_id for upload_id, meta in UPLOAD_REGISTRY.items()
+                   if now - meta.get('created_at', now) > UPLOAD_TTL_SECONDS]
+        for upload_id in expired:
+            meta = UPLOAD_REGISTRY.pop(upload_id, {})
+            path = meta.get('path')
+            if path:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+
+
+def _upload_owner_key():
+    app_user = session.get('app_user')
+    if app_user:
+        return f"app:{app_user}"
+    # Anonymous uploads are bound to the signed browser session, not only to
+    # the remote IP, because multiple officers may share a proxy/NAT address.
+    owner_token = session.get('upload_owner_token')
+    if not owner_token:
+        owner_token = secrets.token_urlsafe(32)
+        session['upload_owner_token'] = owner_token
+    return f"session:{owner_token}"
+
+
+def _get_owned_upload_path(upload_id):
+    _cleanup_expired_uploads()
+    with UPLOAD_REGISTRY_LOCK:
+        meta = UPLOAD_REGISTRY.get(upload_id)
+        if not meta or meta.get('owner') != _upload_owner_key():
+            return None
+        path = meta.get('path')
+        if not path or not os.path.isfile(path):
+            UPLOAD_REGISTRY.pop(upload_id, None)
+            return None
+        return path
+
+
+def _validate_excel_payload(file_storage):
+    original = (file_storage.filename or '').strip()
+    suffix = Path(original).suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError('รูปแบบไฟล์ไม่ถูกต้อง กรุณาอัปโหลดเฉพาะไฟล์ .xls หรือ .xlsx')
+    payload = file_storage.stream.read(app.config['MAX_CONTENT_LENGTH'] + 1)
+    file_storage.stream.seek(0)
+    if len(payload) > app.config['MAX_CONTENT_LENGTH']:
+        raise RequestEntityTooLarge()
+    if suffix == '.xls':
+        if not payload.startswith(OLE_COMPOUND_FILE_HEADER):
+            raise ValueError('โครงสร้างไฟล์ XLS ไม่ถูกต้อง')
+    else:
+        if not payload.startswith(b'PK\\x03\\x04'):
+            raise ValueError('โครงสร้างไฟล์ XLSX ไม่ถูกต้อง')
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                names = archive.namelist()
+                if len(names) > 1000 or any(name.startswith('/') or '..' in Path(name).parts for name in names):
+                    raise ValueError('โครงสร้างไฟล์ XLSX ไม่ปลอดภัย')
+                if sum(info.file_size for info in archive.infolist()) > 50 * 1024 * 1024:
+                    raise ValueError('ข้อมูลภายในไฟล์ XLSX มีขนาดเกินกำหนด')
+                if not {'[Content_Types].xml', 'xl/workbook.xml'}.issubset(names):
+                    raise ValueError('ไม่ใช่ไฟล์ XLSX ที่สมบูรณ์')
+        except zipfile.BadZipFile as exc:
+            raise ValueError('ไฟล์ XLSX เสียหายหรือไม่ใช่ ZIP package') from exc
+    return suffix
 
 # Single automation lock for shared Playwright resources (HF Space friendly)
 _run_lock = threading.Lock()
 _run_active = False
+
+# Historical Excel activity pool used by the client-side auto-plan generator.
+# The current upload is intentionally excluded; only workbook files committed
+# at the project root are considered historical reference data.
+_historical_activity_pool_cache = None
+_historical_activity_sources_cache = []
+_historical_activity_errors_cache = []
+_historical_activity_lock = threading.Lock()
+_valid_visiting_activity_values = {
+    "2", "15", "16", "17", "18", "19", "20", "21", "22",
+    "23", "24", "25", "26", "27", "28", "29", "30", "31", "999",
+}
+
+PORTAL_LOGIN_URL = "https://tandv.doae.go.th/index/login_tv_system.php"
+PORTAL_WORKFLOW_26_URL = "https://tandv.doae.go.th/workflow/workflow_start.php?W=26"
+PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 30_000
+PLAYWRIGHT_ACTION_TIMEOUT_MS = 15_000
+PLAYWRIGHT_RESULT_TIMEOUT_MS = 25_000
+
+
+def _page_diagnostics(page):
+    """Return safe, non-sensitive diagnostics for the current portal page."""
+    try:
+        return page.evaluate("""() => {
+            const selectors = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN', '#USR_APPROVERS'];
+            const workflowControls = {};
+            for (const selector of selectors) {
+                const el = document.querySelector(selector);
+                if (!el) {
+                    workflowControls[selector] = {present: false};
+                    continue;
+                }
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                workflowControls[selector] = {
+                    present: true,
+                    optionCount: el.options ? el.options.length : 0,
+                    ariaHidden: el.getAttribute('aria-hidden'),
+                    display: style.display,
+                    visibility: style.visibility,
+                    visible: Boolean(rect.width && rect.height && style.display !== 'none' && style.visibility !== 'hidden')
+                };
+            }
+            return {
+                urlPath: window.location.pathname,
+                readyState: document.readyState,
+                loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
+                workflowReady: workflowControls['#PL_YAER']?.present && workflowControls['#PL_YAER'].optionCount > 1 &&
+                    workflowControls['#PL_MOUNT']?.present && workflowControls['#PL_MOUNT'].optionCount >= 1 &&
+                    workflowControls['#PL_TAMBONN']?.present && workflowControls['#PL_TAMBONN'].optionCount > 1,
+                workflowControls,
+                modalVisible: Boolean(document.querySelector('#bizModal_402')) &&
+                    getComputedStyle(document.querySelector('#bizModal_402')).display !== 'none'
+            };
+        }""")
+    except Exception as exc:
+        return {"diagnostics_error": str(exc)}
+
+
+def _wait_for_portal_ready(page, stage):
+    """Wait for Workflow 26 controls, including hidden Select2 backing selects."""
+    try:
+        # The portal wraps these native selects with Select2 and intentionally
+        # hides the backing elements. Wait for attachment and populated options,
+        # not CSS visibility of the raw <select>.
+        page.wait_for_function("""() => {
+            const minimums = {
+                '#PL_YAER': 2,
+                '#PL_MOUNT': 1,
+                '#PL_TAMBONN': 2
+            };
+            return Object.entries(minimums).every(([selector, minimum]) => {
+                const el = document.querySelector(selector);
+                return el && el.options && el.options.length >= minimum;
+            });
+        }""", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+    except Exception as exc:
+        state = _page_diagnostics(page)
+        if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
+            code = "AUTH_OR_SESSION_ERROR"
+        else:
+            code = "WORKFLOW_SELECTOR_ERROR"
+        raise RuntimeError(f"{code} at {stage}: {state}") from exc
+
+
+def _wait_for_select_options(page, selector, minimum, stage):
+    """Wait for a dynamic Select2 backing select to receive enough options."""
+    try:
+        selector_js = json.dumps(str(selector), ensure_ascii=False)
+        minimum_js = int(minimum)
+        page.wait_for_function(
+            f"""() => {{
+                const el = document.querySelector({selector_js});
+                return Boolean(el && el.options && el.options.length >= {minimum_js});
+            }}""",
+            timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS,
+        )
+    except Exception as exc:
+        state = _page_diagnostics(page)
+        raise RuntimeError(f"WORKFLOW_DYNAMIC_OPTION_ERROR at {stage}: {state}") from exc
+
+
+def _assert_authenticated(page):
+    state = _page_diagnostics(page)
+    if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
+        raise RuntimeError(f"AUTHENTICATION_ERROR after login: {state}")
+
+
+def _modal_validation_state(page):
+    """Read the relevant modal values and browser validation errors."""
+    return page.evaluate("""() => {
+        const modal = document.querySelector('#bizModal_402');
+        if (!modal) return {modal: 'missing'};
+        return {
+            invalid: Array.from(modal.querySelectorAll(':invalid')).map((el) => ({
+                id: el.id,
+                name: el.name,
+                value: el.value,
+                message: el.validationMessage
+            })),
+            startDate: modal.querySelector('#PD_SDATE')?.value || '',
+            endDate: modal.querySelector('#PD_EDATE')?.value || '',
+            issue: modal.querySelector('#PD_ISSUES')?.value || '',
+            activity: modal.querySelector('#PD_ACTIVITY')?.value || '',
+            other: modal.querySelector('#PD_OTHER')?.value || '',
+            detail: modal.querySelector('#PD_DETAIL')?.value || '',
+            place: modal.querySelector('#PD_PLACE')?.value || '',
+            target: modal.querySelector('#PD_TARGET')?.value || ''
+        };
+    }""")
+
+
+def _verify_finalize_result(page, mode, before_url):
+    """Classify finalization as confirmed or unknown; never claim success on timeout alone."""
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=PLAYWRIGHT_RESULT_TIMEOUT_MS)
+    except Exception:
+        # Some portal submissions do not navigate; body inspection below is still useful.
+        pass
+    page.wait_for_timeout(1_000)
+    state = _page_diagnostics(page)
+    text = str(state.get("bodyText", "")).lower()
+    success_markers = (
+        "บันทึกข้อมูลเรียบร้อย", "บันทึกเรียบร้อย", "ส่งข้อมูลเรียบร้อย",
+        "ดำเนินการเรียบร้อย", "success", "saved", "completed"
+    )
+    url_changed = bool(state.get("url") and state.get("url") != before_url)
+    has_success_marker = any(marker in text for marker in success_markers)
+    if has_success_marker or (url_changed and not state.get("loginVisible")):
+        return {"confirmed": True, "state": state}
+    return {"confirmed": False, "state": state}
 
 # Helper functions for T&V Portal mapping
 def map_activity(activity_name, tool_name):
@@ -296,27 +769,207 @@ def sanitize_location(location, tool_name, tambon, issue_val, office_name=None, 
     return location
 
 def select_by_value_js(page, selector, value):
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('{selector}');
-        if (select) {{
-            select.value = '{value}';
-            select.dispatchEvent(new Event('change'));
-        }}
-    }}""")
+    """Select a native portal option and verify the resulting value."""
+    result = page.evaluate(
+        """({selector, value}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const option = Array.from(select.options).find((item) => item.value === value);
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                options: Array.from(select.options).map((item) => ({value: item.value, text: item.text.trim()}))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "value": str(value or "").strip()},
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"PORTAL_OPTION_ERROR for {selector}: {result}")
+    page.wait_for_timeout(300)
+    selected = page.locator(selector).input_value()
+    if selected != result.get("value"):
+        raise RuntimeError(
+            f"PORTAL_OPTION_NOT_PERSISTED for {selector}: expected={result.get('value')!r}, got={selected!r}"
+        )
+
 
 def select_by_label_js(page, selector, label):
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('{selector}');
-        if (select) {{
-            const option = Array.from(select.options).find(o => o.text.trim() === '{label}');
-            if (option) {{
-                select.value = option.value;
-                select.dispatchEvent(new Event('change'));
-            }}
-        }}
-    }}""")
+    """Select an option by visible label without interpolating user text into JS."""
+    result = page.evaluate(
+        """({selector, label}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const wanted = String(label || '').trim();
+            const option = Array.from(select.options).find((item) => item.text.trim() === wanted);
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                label: wanted,
+                options: Array.from(select.options).map((item) => ({value: item.value, text: item.text.trim()}))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "label": str(label or "").strip()},
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"PORTAL_OPTION_ERROR for {selector}: {result}")
+    page.wait_for_timeout(300)
+    selected = page.locator(selector).input_value()
+    if selected != result.get("value"):
+        raise RuntimeError(
+            f"PORTAL_OPTION_NOT_PERSISTED for {selector}: expected={result.get('value')!r}, got={selected!r}"
+        )
+
 
 _THAI_DIGIT_MAP = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+
+def _select_modal_option(page, selector, value, label=""):
+    """Select a dynamic portal option and verify that it remains selected."""
+    target = str(value or "").strip()
+    target_label = str(label or "").strip()
+    last_state = {}
+
+    for _ in range(12):
+        last_state = page.evaluate(
+            """({selector, target, label}) => {
+                const select = document.querySelector(selector);
+                if (!select) return {found: false, reason: 'select-not-found'};
+                const option = Array.from(select.options).find((item) =>
+                    item.value === target || (label && item.text.trim() === label)
+                );
+                if (!option) {
+                    return {
+                        found: false,
+                        reason: 'option-not-found',
+                        options: Array.from(select.options).map((item) => ({
+                            value: item.value,
+                            text: item.text.trim()
+                        }))
+                    };
+                }
+                select.value = option.value;
+                select.dispatchEvent(new Event('input', {bubbles: true}));
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+                if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+                return {found: true, value: option.value, text: option.text.trim()};
+            }""",
+            {"selector": selector, "target": target, "label": target_label},
+        )
+        if last_state.get("found"):
+            page.wait_for_timeout(350)
+            selected = page.evaluate(
+                """(select) => {
+                    const el = document.querySelector(select);
+                    return el ? el.value : '';
+                }""",
+                selector,
+            )
+            if selected == last_state.get("value"):
+                return
+        page.wait_for_timeout(300)
+
+    raise RuntimeError(
+        f"Portal option was not selected for {selector}: "
+        f"target={target!r}, state={last_state}"
+    )
+
+
+def _set_modal_select_value(page, selector, value, label=""):
+    """Set a final modal select value without firing its destructive change handler."""
+    target = str(value or "").strip()
+    target_label = str(label or "").strip()
+    state = page.evaluate(
+        """({selector, target, label}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const option = Array.from(select.options).find((item) =>
+                item.value === target || (label && item.text.trim() === label)
+            );
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                options: Array.from(select.options).map((item) => ({
+                    value: item.value,
+                    text: item.text.trim()
+                }))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            return {found: true, value: option.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "target": target, "label": target_label},
+    )
+    if not state.get("found"):
+        raise RuntimeError(
+            f"Portal final option was not found for {selector}: "
+            f"target={target!r}, state={state}"
+        )
+    page.wait_for_timeout(250)
+    selected = page.locator(selector).input_value()
+    if selected != state.get("value"):
+        raise RuntimeError(
+            f"Portal final option was not retained for {selector}: "
+            f"expected={state.get('value')!r}, got={selected!r}"
+        )
+
+
+def _set_modal_dates(page, date_value):
+    """Set identical start/end dates for a one-day plan record."""
+    same_day = str(date_value or "").strip()
+    if not same_day:
+        raise ValueError("A plan record must contain a date")
+    last_values = {}
+    for _ in range(4):
+        last_values = page.evaluate(
+            """(dateValue) => {
+                const modal = document.querySelector('#bizModal_402');
+                if (!modal) return {};
+                const values = {};
+                ['#PD_SDATE', '#PD_EDATE'].forEach((selector) => {
+                    const input = modal.querySelector(selector);
+                    if (!input) return;
+                    input.removeAttribute('disabled');
+                    input.value = dateValue;
+                    ['input', 'change', 'blur'].forEach((eventName) => {
+                        input.dispatchEvent(new Event(eventName, {bubbles: true}));
+                    });
+                    values[selector] = input.value;
+                });
+                return values;
+            }""",
+            same_day,
+        )
+        if (
+            last_values.get("#PD_SDATE") == same_day
+            and last_values.get("#PD_EDATE") == same_day
+        ):
+            page.wait_for_timeout(500)
+            stable_values = page.evaluate("""() => {
+                const modal = document.querySelector('#bizModal_402');
+                if (!modal) return {};
+                return {
+                    '#PD_SDATE': modal.querySelector('#PD_SDATE')?.value || '',
+                    '#PD_EDATE': modal.querySelector('#PD_EDATE')?.value || ''
+                };
+            }""")
+            if (
+                stable_values.get("#PD_SDATE") == same_day
+                and stable_values.get("#PD_EDATE") == same_day
+            ):
+                return
+        page.wait_for_timeout(450)
+
+    raise RuntimeError(f"Portal same-day date fields were not retained: {last_values}")
+
 
 def thai_to_arabic(text):
     return str(text or "").translate(_THAI_DIGIT_MAP)
@@ -602,39 +1255,357 @@ def load_excel_records(xls_path, sheet_name="มิ.ย.69", office_name=None, d
             })
     return apply_sida_office_meeting_rules(records, office_name=office_name)
 
+
+def load_historical_activity_pool():
+    """Build weighted VISITING activities from committed historical workbooks."""
+    global _historical_activity_pool_cache
+    global _historical_activity_sources_cache
+    global _historical_activity_errors_cache
+
+    if _historical_activity_pool_cache is not None:
+        return (
+            _historical_activity_pool_cache,
+            _historical_activity_sources_cache,
+            _historical_activity_errors_cache,
+        )
+
+    with _historical_activity_lock:
+        if _historical_activity_pool_cache is not None:
+            return (
+                _historical_activity_pool_cache,
+                _historical_activity_sources_cache,
+                _historical_activity_errors_cache,
+            )
+
+        weighted = {}
+        sources = []
+        errors = []
+        workbook_names = sorted(
+            name for name in os.listdir(BASE_DIR)
+            if os.path.isfile(os.path.join(BASE_DIR, name))
+            and os.path.splitext(name)[1].lower() in {".xls", ".xlsx"}
+            and not name.startswith("~$")
+        )
+
+        seen_workbook_hashes = set()
+        for workbook_name in workbook_names:
+            workbook_path = os.path.join(BASE_DIR, workbook_name)
+            workbook_loaded = False
+            try:
+                with open(workbook_path, "rb") as workbook_file:
+                    workbook_hash = hashlib.sha1(workbook_file.read()).hexdigest()
+                if workbook_hash in seen_workbook_hashes:
+                    continue
+                seen_workbook_hashes.add(workbook_hash)
+
+                workbook = pd.ExcelFile(workbook_path)
+                for sheet_name in workbook.sheet_names:
+                    if not is_thai_month_sheet(sheet_name):
+                        continue
+                    records = load_excel_records(workbook_path, sheet_name)
+                    workbook_loaded = True
+                    for record in records:
+                        if record.get("officeOnly"):
+                            continue
+                        if str(record.get("issue_val") or "").strip() != "2":
+                            continue
+
+                        activity_val = str(record.get("activity_val") or "").strip()
+                        activity_text = str(record.get("activity") or "").strip()
+                        other_text = str(record.get("other_text") or "").strip()
+                        if activity_val not in _valid_visiting_activity_values or not activity_text:
+                            continue
+
+                        key = (activity_val, activity_text, other_text)
+                        item = weighted.setdefault(
+                            key,
+                            {
+                                "issue_val": "2",
+                                "activity_val": activity_val,
+                                "activity": activity_text,
+                                "other_text": other_text,
+                                "weight": 0,
+                            },
+                        )
+                        item["weight"] += 1
+
+                if workbook_loaded:
+                    sources.append(workbook_name)
+            except Exception as exc:
+                errors.append(f"{workbook_name}: {exc}")
+
+        _historical_activity_pool_cache = sorted(
+            weighted.values(),
+            key=lambda item: (-item["weight"], item["activity_val"], item["activity"]),
+        )
+        _historical_activity_sources_cache = sources
+        _historical_activity_errors_cache = errors
+        return (
+            _historical_activity_pool_cache,
+            _historical_activity_sources_cache,
+            _historical_activity_errors_cache,
+        )
+
+
+
+@app.route('/api/access/status')
+def access_status():
+    return jsonify({
+        'success': True,
+        'auth_required': APP_AUTH_REQUIRED,
+        'authenticated': _app_authenticated(),
+        'csrf_token': _ensure_csrf_token(),
+    })
+
+
+@app.route('/api/auth/login', methods=['POST'])
+@limiter.limit('5 per minute; 20 per hour', key_func=_rate_limit_key)
+def app_login():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if len(username) > 256 or len(password) > 1024:
+        return jsonify({'success': False, 'error': 'เข้าสู่ระบบไม่สำเร็จ'}), 401
+    if not _auth_configured():
+        return jsonify({'success': False, 'error': 'ระบบยืนยันตัวตนยังไม่ได้ตั้งค่า'}), 503
+    valid = hmac.compare_digest(username, APP_AUTH_USERNAME) and check_password_hash(APP_AUTH_PASSWORD_HASH, password)
+    if not valid:
+        return jsonify({'success': False, 'error': 'เข้าสู่ระบบไม่สำเร็จ'}), 401
+    session.clear()
+    session['app_user'] = APP_AUTH_USERNAME
+    session['csrf_token'] = secrets.token_urlsafe(32)
+    session.permanent = True
+    return jsonify({'success': True, 'csrf_token': session['csrf_token']})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def app_logout():
+    session.clear()
+    return ('', 204)
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/docs/<path:filename>')
+def serve_docs(filename):
+    return send_from_directory(os.path.join(BASE_DIR, 'docs'), filename)
+
+@app.route('/README.md')
+def serve_readme():
+    return send_from_directory(BASE_DIR, 'README.md', mimetype='text/markdown')
+
+@app.route('/robots.txt')
+def serve_robots():
+    """Serve robots.txt for SEO crawlers."""
+    return send_from_directory(os.path.join(BASE_DIR, 'static'), 'robots.txt', mimetype='text/plain')
+
+@app.route('/sitemap.xml')
+def serve_sitemap():
+    """Serve XML sitemap for SEO indexing."""
+    return send_from_directory(os.path.join(BASE_DIR, 'static'), 'sitemap.xml', mimetype='application/xml')
+
+@app.route('/api/health')
+def health_check():
+    meta = geo_data.load_meta()
+    return jsonify({
+        "status": "ok",
+        "message": "T&V Automation Server is running",
+        "geo": meta.get("counts", {}),
+        "online": True
+    })
+
+@app.route('/api/geo/provinces')
+def api_geo_provinces():
+    return jsonify({"success": True, "provinces": geo_data.load_provinces()})
+
+@app.route('/api/geo/amphoes')
+def api_geo_amphoes():
+    province_code = request.args.get('province_code', '').strip()
+    if not province_code:
+        return jsonify({"success": False, "error": "ต้องระบุ province_code"}), 400
+    return jsonify({"success": True, "amphoes": geo_data.get_amphoes(province_code)})
+
+@app.route('/api/geo/tambons')
+def api_geo_tambons():
+    amphoe_code = request.args.get('amphoe_code', '').strip()
+    if not amphoe_code:
+        return jsonify({"success": False, "error": "ต้องระบุ amphoe_code"}), 400
+    return jsonify({"success": True, "tambons": geo_data.get_tambons(amphoe_code)})
+
+@app.route('/api/geo/villages')
+def api_geo_villages():
+    tambon_code = request.args.get('tambon_code', '').strip()
+    if not tambon_code:
+        return jsonify({"success": False, "error": "ต้องระบุ tambon_code"}), 400
+    villages = geo_data.get_villages(tambon_code)
+    return jsonify({"success": True, "villages": villages})
+
+@app.route('/api/districts')
+def api_districts():
+    """Thin wrapper: presets + resolved สีดา quick-select."""
+    sida = geo_data.resolve_sida_codes()
+    presets = geo_data.load_presets()
+    # refresh sida preset with live codes
+    out = []
+    for p in presets:
+        if p.get("id") == "sida":
+            out.append(sida)
+        else:
+            out.append(p)
+    if not any(p.get("id") == "sida" for p in out):
+        out.insert(0, sida)
+    return jsonify({"success": True, "presets": out, "sida": sida})
+
+@app.route('/api/location-presets')
+def api_location_presets():
+    office_name = request.args.get('office_name', '').strip()
+    tambon_name = request.args.get('tambon_name', '').strip()
+    tambon_code = request.args.get('tambon_code', '').strip()
+    villages = geo_data.get_villages(tambon_code) if tambon_code else []
+    presets = geo_data.build_location_presets(office_name, tambon_name, villages)
+    return jsonify({"success": True, "presets": presets})
+
+@app.route('/api/add-row', methods=['POST'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
+def add_row():
+    """Create a blank row template for the frontend."""
+    data = request.json or {}
+    row_id = data.get('id', 0)
+    office_name = data.get('office_name', '')
+    tambon_name = data.get('tambon_name', '') or data.get('tambon', '')
+    village_name = data.get('village_name', '')
+    moo = data.get('moo', '')
+    villages = data.get('villages') or ([village_name] if village_name else [])
+    moos = data.get('moos') or ([moo] if moo else [])
+    location = geo_data.default_location(
+        office_name, tambon_name, village_name, moo, villages=villages, moos=moos
+    )
+    return jsonify({
+        "success": True,
+        "record": {
+            "id": row_id,
+            "excel_date": "",
+            "date": "",
+            "activity": "",
+            "tool": "",
+            "location": location,
+            "tambon": tambon_name,
+            "moo": (moos[0] if moos else moo),
+            "moos": moos,
+            "village": (villages[0] if villages else village_name),
+            "villages": villages,
+            "target_raw": "",
+            "target_num": 0,
+            "co_workers": "",
+            "issue_val": "2",
+            "activity_val": "999",
+            "other_text": ""
+        }
+    })
+
+@app.route('/api/upload', methods=['POST'])
+@limiter.limit('5 per 10 minutes', key_func=_rate_limit_key)
+def upload_file():
+    _cleanup_expired_uploads()
+    if 'file' not in request.files:
+        return jsonify({"success": False, "error": "ไม่พบไฟล์ที่อัปโหลด"}), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({"success": False, "error": "กรุณาเลือกไฟล์ Excel"}), 400
+
+    save_path = None
+    try:
+        suffix = _validate_excel_payload(file)
+        upload_id = secrets.token_urlsafe(24)
+        # The server chooses the suffix from a strict allowlist. The temporary
+        # filename itself is generated by tempfile, never by the client.
+        temp_suffix = '.xls' if suffix == '.xls' else '.xlsx'
+        with tempfile.NamedTemporaryFile(
+            mode='wb', prefix='tv-upload-', suffix=temp_suffix,
+            dir=UPLOAD_DIR, delete=False
+        ) as temp_upload:
+            save_path = temp_upload.name
+            file.save(temp_upload)
+        xl = pd.ExcelFile(save_path)
+        sheets = [sh for sh in xl.sheet_names if is_thai_month_sheet(sh)]
+        sheets.sort(key=lambda sh: get_sheet_sort_key(sh, save_path), reverse=True)
+        with UPLOAD_REGISTRY_LOCK:
+            UPLOAD_REGISTRY[upload_id] = {
+                'path': save_path,
+                'owner': _upload_owner_key(),
+                'created_at': time.time(),
+            }
+        return jsonify({
+            "success": True,
+            "message": "อัปโหลดไฟล์สำเร็จ!",
+            "sheets": sheets,
+            "filename": "ไฟล์ Excel ที่อัปโหลด",
+            "temp_filename": upload_id,
+        })
+    except RequestEntityTooLarge:
+        raise
+    except Exception:
+        if save_path:
+            try:
+                os.remove(save_path)
+            except FileNotFoundError:
+                pass
+        return jsonify({"success": False, "error": "ไม่สามารถตรวจสอบหรืออ่านไฟล์ Excel ได้"}), 400
+
+def _resolve_workbook_path(temp_filename=''):
+    if temp_filename:
+        return _get_owned_upload_path(temp_filename)
+    return DEFAULT_XLS_PATH
+
+
 @app.route('/api/sheets', methods=['GET'])
 def get_sheets():
     try:
-        temp_filename = request.args.get('temp_filename', '')
-        safe_filename = secure_filename(temp_filename) if temp_filename else ""
-        xls_path = os.path.join(UPLOAD_DIR, safe_filename) if safe_filename else DEFAULT_XLS_PATH
-        
-        if not os.path.exists(xls_path):
-            return jsonify({"success": True, "sheets": [], "current_file": ""})
-            
+        xls_path = _resolve_workbook_path(request.args.get('temp_filename', '').strip())
+        if not xls_path or not os.path.isfile(xls_path):
+            return jsonify({"success": False, "error": "ไม่พบไฟล์หรือไม่มีสิทธิ์เข้าถึงไฟล์"}), 404
         xl = pd.ExcelFile(xls_path)
         sheets = [sh for sh in xl.sheet_names if is_thai_month_sheet(sh)]
         sheets.sort(key=lambda sh: get_sheet_sort_key(sh, xls_path), reverse=True)
         return jsonify({"success": True, "sheets": sheets, "current_file": os.path.basename(xls_path)})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        return jsonify({"success": False, "error": "ไม่สามารถอ่านรายการแผ่นงานได้"}), 400
 
 @app.route('/api/records', methods=['GET'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
 def get_records():
     sheet = request.args.get('sheet', 'มิ.ย.69')
-    temp_filename = request.args.get('temp_filename', '')
-    safe_filename = secure_filename(temp_filename) if temp_filename else ""
-    xls_path = os.path.join(UPLOAD_DIR, safe_filename) if safe_filename else DEFAULT_XLS_PATH
+    temp_filename = request.args.get('temp_filename', '').strip()
+    xls_path = _resolve_workbook_path(temp_filename)
     office_name = request.args.get('office_name', '').strip() or request.headers.get('X-Office-Name', '').strip()
     default_tambon = request.args.get('tambon', '').strip() or request.headers.get('X-Tambon', '').strip()
     try:
+        if not xls_path or not os.path.isfile(xls_path):
+            return jsonify({"success": False, "error": "ไม่พบไฟล์หรือไม่มีสิทธิ์เข้าถึงไฟล์"}), 404
+        # Excel is processed locally with the deterministic rules-based parser.
+        # No workbook data or external AI API key is sent to a third party.
         records = load_excel_records(
             xls_path, sheet, office_name=office_name, default_tambon=default_tambon
         )
 
         return jsonify({"success": True, "records": records})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        return jsonify({"success": False, "error": "ไม่สามารถอ่านข้อมูลแผนงานได้"}), 400
+
+@app.route('/api/historical-activities', methods=['GET'])
+def get_historical_activities():
+    """Return weighted field activities from historical root-level Excel files."""
+    activities, source_files, errors = load_historical_activity_pool()
+    return jsonify({
+        "success": True,
+        "activities": activities,
+        "source_files": source_files,
+        "errors": errors,
+        "count": len(activities),
+    })
 
 
 def _month_name_thai_from_sheet(sheet_name):
@@ -671,43 +1642,38 @@ def _group_records_by_tambon(records, default_tambon, role):
     return [(k, groups[k]) for k in order]
 
 
-def _fill_record_row(page, rec, idx, q, shot_prefix):
+def _fill_record_row(page, rec, idx, q):
     activity_preview = (rec.get('activity') or '')[:30]
     msg_prefix = f"รายการที่แถว {rec.get('id', idx)}: {activity_preview}..."
     q.put({"type": "row_status", "index": idx, "status": "processing", "message": f"กำลังกรอก: {msg_prefix}"})
 
-    page.click('a:has-text("เพิ่มข้อมูล")')
-    page.wait_for_selector('#bizModal_402', state='visible')
-    page.wait_for_timeout(800)
+    page.locator('a:has-text("เพิ่มข้อมูล")').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    page.wait_for_selector('#bizModal_402', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    page.wait_for_timeout(500)
 
     modal = page.locator('#bizModal_402')
-    modal.locator('select#PD_ISSUES').select_option(value=str(rec['issue_val']))
+    _select_modal_option(page, '#bizModal_402 select#PD_ISSUES', rec['issue_val'])
     page.wait_for_timeout(800)
-    modal.locator('select#PD_ACTIVITY').select_option(value=str(rec['activity_val']))
+    _select_modal_option(
+        page,
+        '#bizModal_402 select#PD_ACTIVITY',
+        rec['activity_val'],
+        rec.get('activity', ''),
+    )
 
     # If activity is "999" (อื่นๆ), input#PD_OTHER is mandatory for modal form validation
     if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
-        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30]
-        try:
-            modal.locator('input#PD_OTHER').fill(other_val)
-        except Exception:
-            pass
+        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30].strip()
+        other_input = modal.locator('input#PD_OTHER')
+        if other_input.count() != 1:
+            raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER is required for activity 999")
+        other_input.fill(other_val)
+        if not other_input.input_value().strip():
+            raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER remained empty for activity 999")
 
     be_date = rec['date']
-    page.evaluate(f"""(dateVal) => {{
-        const modalEl = document.querySelector('#bizModal_402');
-        if (!modalEl) return;
-        ['#PD_SDATE', '#PD_EDATE'].forEach(sel => {{
-            const el = modalEl.querySelector(sel);
-            if (el) {{
-                el.removeAttribute('disabled');
-                el.value = dateVal;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-            }}
-        }});
-    }}""", be_date)
+    # The portal's PD_SDATE change handler clears PD_EDATE. Set both date
+    # fields after all generic modal events so the date pair is the final state.
 
     place = rec.get('location') or ''
     modal.locator('textarea#PD_DETAIL').fill(rec.get('activity') or '')
@@ -735,112 +1701,173 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             btn.classList.remove('disabled');
         }
     }""")
-    page.wait_for_timeout(300)
 
-    # Click submit button with JS fallback if Playwright actionability fails
+    # Generic change events can asynchronously rebuild PD_ACTIVITY and clear its value.
+    # Let that handler settle, then set dynamic selects without firing their destructive
+    # change handlers. Re-fill PD_OTHER after the final activity selection when needed.
+    page.wait_for_timeout(1_000)
+    _set_modal_select_value(page, '#bizModal_402 select#PD_ISSUES', rec['issue_val'])
+    _set_modal_select_value(
+        page,
+        '#bizModal_402 select#PD_ACTIVITY',
+        rec['activity_val'],
+        rec.get('activity', ''),
+    )
+    if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
+        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30].strip()
+        modal.locator('input#PD_OTHER').fill(other_val)
+
+    # Set dates last because the portal clears PD_EDATE when PD_SDATE changes.
+    _set_modal_dates(page, be_date)
+    validation_state = _modal_validation_state(page)
+    required_fields = {
+        "issue": str(rec.get("issue_val") or ""),
+        "activity": str(rec.get("activity_val") or ""),
+        "startDate": str(be_date),
+        "endDate": str(be_date),
+        "detail": str(rec.get("activity") or ""),
+        "place": place,
+        "target": str(rec.get("target_num") or 0),
+    }
+    for field, expected in required_fields.items():
+        actual = str(validation_state.get(field) or "")
+        if field in ("detail", "place"):
+            if expected and actual != expected:
+                raise RuntimeError(f"MODAL_FIELD_MISMATCH: {field} expected={expected!r}, actual={actual!r}")
+        elif actual != expected:
+            raise RuntimeError(f"MODAL_FIELD_MISMATCH: {field} expected={expected!r}, actual={actual!r}")
+    if validation_state.get("invalid"):
+        raise RuntimeError(f"MODAL_VALIDATION_ERROR before save: {validation_state}")
+
+    # Click the modal's save control. Do not submit the form natively because that
+    # bypasses the portal validation and makes the final result ambiguous.
     try:
-        modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=5000)
-    except Exception:
-        page.evaluate("""() => {
+        modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    except Exception as click_exc:
+        fallback_result = page.evaluate("""() => {
             const modalEl = document.querySelector('#bizModal_402');
-            if (!modalEl) return;
+            if (!modalEl) return {clicked: false, reason: 'modal-not-found'};
             const btn = Array.from(modalEl.querySelectorAll('button, input[type="submit"]'))
                 .find(b => (b.textContent || '').includes('บันทึก') || (b.value || '').includes('บันทึก'))
                 || modalEl.querySelector('button[type="submit"]')
                 || modalEl.querySelector('button.btn-primary');
-            if (btn) {
-                btn.removeAttribute('disabled');
-                btn.disabled = false;
-                btn.click();
-            } else {
-                const form = modalEl.querySelector('form');
-                if (form) form.submit();
-            }
+            if (!btn) return {clicked: false, reason: 'save-button-not-found'};
+            btn.removeAttribute('disabled');
+            btn.disabled = false;
+            btn.classList.remove('disabled');
+            btn.click();
+            return {clicked: true};
         }""")
+        if not fallback_result.get("clicked"):
+            raise RuntimeError(f"MODAL_SAVE_CONTROL_ERROR: {fallback_result}") from click_exc
 
-    page.wait_for_selector('#bizModal_402', state='hidden', timeout=10000)
+    try:
+        page.wait_for_selector('#bizModal_402', state='hidden', timeout=PLAYWRIGHT_RESULT_TIMEOUT_MS)
+    except Exception as exc:
+        validation_state = _modal_validation_state(page)
+        raise RuntimeError(
+            f"MODAL_SAVE_UNCONFIRMED: portal modal stayed open: {validation_state}"
+        ) from exc
     page.wait_for_timeout(500)
     q.put({"type": "row_status", "index": idx, "status": "success", "message": f"กรอกสำเร็จ: {msg_prefix}"})
 
 
 def _select_approver(page, approver):
-    safe = (approver or "").replace("'", "\\'")
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('select#USR_APPROVERS');
-        if (select) {{
-            const searchName = '{safe}'.trim();
-            let option = Array.from(select.options).find(o => o.text.trim() === searchName);
-            if (!option) {{
-                option = Array.from(select.options).find(o => o.text.includes(searchName));
-            }}
-            if (!option) {{
-                option = Array.from(select.options).find(o => searchName.includes(o.text.trim()));
-            }}
-            if (option) {{
-                select.value = option.value;
-                select.dispatchEvent(new Event('change'));
-            }}
-        }}
-    }}""")
+    """Select and verify an approver; never continue with a silent no-op."""
+    requested = str(approver or "").strip()
+    if not requested:
+        raise RuntimeError("APPROVER_ERROR: approver name is empty")
+    result = page.evaluate(
+        """(requested) => {
+            const select = document.querySelector('select#USR_APPROVERS');
+            if (!select) return {found: false, reason: 'select-not-found'};
+            let option = Array.from(select.options).find((item) => item.text.trim() === requested);
+            if (!option) option = Array.from(select.options).find((item) => item.text.includes(requested));
+            if (!option) option = Array.from(select.options).find((item) => requested.includes(item.text.trim()));
+            if (!option) return {
+                found: false,
+                reason: 'approver-not-found',
+                requested,
+                options: Array.from(select.options).map((item) => item.text.trim())
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        requested,
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"APPROVER_ERROR: {result}")
+    page.wait_for_timeout(300)
+    selected = page.locator('select#USR_APPROVERS').input_value()
+    if selected != result.get("value"):
+        raise RuntimeError(
+            f"APPROVER_NOT_PERSISTED: expected={result.get('value')!r}, got={selected!r}"
+        )
 
 
 def _finish_plan(page, mode, q):
     if mode == 'dry_run':
         q.put({"type": "info", "message": "กรอกข้อมูลเสร็จสิ้นในโหมด Dry-run สำหรับตำบลนี้แล้ว"})
         return
+
     if mode == 'draft':
+        button_selector = '#wf-btn-temp-save'
+        label = 'บันทึกข้อมูลแบบชั่วคราว (ร่าง)'
         q.put({"type": "info", "message": "กำลังกดปุ่มบันทึกชั่วคราว (Save Draft)..."})
-        page.click('#wf-btn-temp-save')
-        try:
-            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-            q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกชั่วคราว..."})
-            page.click('button.confirm')
-            page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        page.evaluate("""() => {
-            const form = document.querySelector('#form_wf') || document.querySelector('form');
-            if (form) form.submit();
-        }""")
-        page.wait_for_timeout(5000)
-        q.put({"type": "info", "message": "บันทึกข้อมูลแบบชั่วคราว (ร่าง) เรียบร้อยแล้ว!"})
     else:
+        button_selector = '#wf-btn-save'
+        label = 'บันทึกและส่งข้อมูล'
         q.put({"type": "info", "message": "กำลังกดปุ่มบันทึกและส่งแผน..."})
-        page.click('#wf-btn-save')
-        try:
-            page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-            q.put({"type": "info", "message": "กำลังกดยืนยันการบันทึกและส่งแผน..."})
-            page.click('button.confirm')
-            page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        page.evaluate("""() => {
-            const form = document.querySelector('#form_wf') || document.querySelector('form');
-            if (form) form.submit();
-        }""")
-        page.wait_for_timeout(5000)
-        q.put({"type": "info", "message": "บันทึกและส่งข้อมูลเรียบร้อยแล้ว!"})
+
+    before_url = page.url
+    page.locator(button_selector).click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    try:
+        page.wait_for_selector('button.confirm', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        q.put({"type": "info", "message": f"กำลังกดยืนยัน{label}..."})
+        page.locator('button.confirm').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+    except Exception as exc:
+        # Do not call native form.submit() here: it bypasses portal validation and
+        # would make it impossible to distinguish a rejected save from a success.
+        result = _verify_finalize_result(page, mode, before_url)
+        if not result.get("confirmed"):
+            raise RuntimeError(
+                f"FINALIZE_CONFIRMATION_ERROR: {label} was not confirmed: {result.get('state')}"
+            ) from exc
+
+    result = _verify_finalize_result(page, mode, before_url)
+    if not result.get("confirmed"):
+        raise RuntimeError(
+            f"FINALIZE_UNKNOWN_RESULT: {label} may or may not have been processed; "
+            f"do not retry without checking the portal: {result.get('state')}"
+        )
+    q.put({"type": "info", "message": f"ยืนยันผลแล้ว: {label}"})
 
 
 @app.route('/api/run', methods=['POST'])
+@limiter.limit('2 per 10 minutes', key_func=_rate_limit_key)
 def run_automation():
     global _run_active
     data = request.json or {}
     records = data.get('records', [])
+    run_context, authorization_error = _validate_run_authorization(data)
+    if authorization_error:
+        error_body, error_status = authorization_error
+        return jsonify(error_body), error_status
+
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     sheet_name = data.get('sheet', 'มิ.ย.69')
-    tambon = data.get('tambon', '')
-    role = data.get('role', 'officer')
-    office_name = data.get('office_name', '')
-    approver = data.get('approver', '')
+    tambon = run_context['tambon']
+    role = run_context['role']
+    office_name = run_context['office_name']
+    approver = run_context['approver']
     headless = data.get('headless', False)
     if sys.platform != 'win32' or os.environ.get('HEADLESS', '0') == '1':
         headless = True
-    mode = data.get('mode', 'dry_run')
-    if 'dry_run' in data and mode == 'dry_run':
-        if not data['dry_run']:
-            mode = 'submit'
+    mode = run_context['mode']
 
     # Each officer must supply their own T&V account — never use shared defaults
     if not username or not password:
@@ -863,14 +1890,13 @@ def run_automation():
 
     month_name_thai = _month_name_thai_from_sheet(sheet_name)
     groups = _group_records_by_tambon(records, tambon, role)
-    shot_prefix = f"err_{uuid.uuid4().hex[:10]}"
-
     def event_stream():
         global _run_active
         q = queue.Queue()
 
         def run_playwright():
             from playwright.sync_api import sync_playwright
+            browser = None
             try:
                 q.put({"type": "info", "message": f"พื้นที่: {office_name or '-'} | บทบาท: {role} | ตำบลที่จะกรอก: {len(groups)} กลุ่ม"})
                 q.put({"type": "info", "message": "กำลังเปิดเบราว์เซอร์..."})
@@ -878,46 +1904,48 @@ def run_automation():
                     browser = p.chromium.launch(headless=headless)
                     context = browser.new_context()
                     page = context.new_page()
+                    page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
 
                     q.put({"type": "info", "message": "กำลังเข้าสู่ระบบเว็บ T&V..."})
-                    page.goto("https://tandv.doae.go.th/index/login_tv_system.php")
-                    page.wait_for_load_state("networkidle")
+                    page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                    page.wait_for_selector('input[name="USER_NAME"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.wait_for_selector('input[name="USER_PASSWORD"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
                     page.fill('input[name="USER_NAME"]', username)
                     page.fill('input[name="USER_PASSWORD"]', password)
-                    page.click('#login_submit')
-                    page.wait_for_timeout(4000)
-
-                    if "login" in page.url:
-                        q.put({"type": "error", "message": "เข้าสู่ระบบไม่สำเร็จ! กรุณาตรวจสอบรหัสผ่านอีกครั้ง"})
-                        browser.close()
-                        return
+                    page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(2_000)
+                    _assert_authenticated(page)
 
                     for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
                         q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
-                        page.goto("https://tandv.doae.go.th/workflow/workflow_start.php?W=26")
-                        page.wait_for_load_state("networkidle")
-                        page.wait_for_timeout(2000)
+                        page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                        _assert_authenticated(page)
+                        _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
 
                         q.put({"type": "info", "message": f"เลือก ปี {year_num}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
                         select_by_value_js(page, 'select#PL_YAER', year_num)
-                        page.wait_for_timeout(800)
+                        _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
                         select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
-                        page.wait_for_timeout(800)
+                        page.wait_for_timeout(700)
                         select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
-                        page.wait_for_timeout(1200)
+                        page.wait_for_timeout(700)
 
                         for idx, rec in indexed_recs:
                             try:
-                                _fill_record_row(page, rec, idx, q, shot_prefix)
+                                _fill_record_row(page, rec, idx, q)
                             except Exception as e_row:
                                 q.put({"type": "row_status", "index": idx, "status": "error",
                                        "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
                                 try:
-                                    shot_path = os.path.join("static", f"{shot_prefix}_{idx}.png")
-                                    page.screenshot(path=shot_path)
-                                    q.put({"type": "screenshot", "url": f"/static/{shot_prefix}_{idx}.png"})
-                                except Exception:
-                                    pass
+                                    # Keep diagnostic screenshots transient and server-side only.
+                                    # Never publish portal screenshots under /static.
+                                    page.screenshot()
+                                    q.put({"type": "screenshot", "available": False,
+                                           "message": "ซ่อนภาพหน้าจอเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล"})
+                                    q.put({"type": "diagnostics", "index": idx, "details": _page_diagnostics(page)})
+                                except Exception as screenshot_exc:
+                                    q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {type(screenshot_exc).__name__}"})
                                 try:
                                     if page.locator('#bizModal_402').is_visible():
                                         page.keyboard.press('Escape')
@@ -936,11 +1964,29 @@ def run_automation():
                             q.put({"type": "info", "message": "Dry-run ครบทุกตำบล — เบราว์เซอร์จะเปิดค้างไว้ 3 นาทีเพื่อตรวจสอบ"})
                             page.wait_for_timeout(180000)
 
-                    browser.close()
                     q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ!"})
+                    # Close while the sync_playwright context is still alive.
+                    # The context manager owns teardown after this block; calling
+                    # browser.close() later would produce "Event loop is closed".
+                    if browser is not None:
+                        try:
+                            if browser.is_connected():
+                                browser.close()
+                        except Exception as close_exc:
+                            q.put({"type": "info", "message": f"ปิดเบราว์เซอร์ไม่สมบูรณ์: {close_exc}"})
+                        finally:
+                            browser = None
             except Exception as ex:
                 q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})
             finally:
+                # sync_playwright() has already handled teardown on error.
+                # Do not call browser.close() after its event loop is stopped.
+                browser = None
+                _run_active = False
+                try:
+                    _run_lock.release()
+                except RuntimeError:
+                    pass
                 q.put(None)
 
         t = threading.Thread(target=run_playwright)
@@ -953,11 +1999,10 @@ def run_automation():
                     break
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
-            _run_active = False
-            try:
-                _run_lock.release()
-            except RuntimeError:
-                pass
+            # The worker owns the lock and releases it only after Playwright has
+            # actually stopped. Do not overwrite the worker's lifecycle state if
+            # the SSE client disconnects before the worker finishes.
+            pass
 
     return Response(event_stream(), mimetype='text/event-stream')
 

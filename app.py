@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session
+from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session, g
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import json
@@ -183,6 +183,18 @@ def _validate_run_authorization(data):
 
 
 @app.before_request
+def set_csp_nonce():
+    # A fresh nonce per response authorizes only the JSON-LD script rendered by
+    # the server; all executable JavaScript remains external and same-origin.
+    g.csp_nonce = secrets.token_urlsafe(16)
+
+
+@app.context_processor
+def inject_csp_nonce():
+    return {'csp_nonce': getattr(g, 'csp_nonce', '')}
+
+
+@app.before_request
 def enforce_api_access_boundary():
     if not request.path.startswith('/api/'):
         return None
@@ -206,10 +218,10 @@ def enforce_api_access_boundary():
 def handle_request_too_large(_error):
     return jsonify({'success': False, 'error': 'ไฟล์หรือคำขอมีขนาดใหญ่เกินกำหนด'}), 413
 
-# Strict CSP is shipped in Report-Only mode first because the legacy template
-# still contains inline event handlers, inline style attributes, and JSON-LD.
-# Set CSP_ENFORCE=1 only after the browser violation inventory is remediated.
-CSP_ENFORCE = os.getenv('CSP_ENFORCE', '').strip().lower() in {'1', 'true', 'yes'}
+# CSP is enforced by default in production after the inline-handler/style
+# migration. Development and test remain Report-Only unless explicitly enabled.
+_csp_default = '1' if APP_ENV in {'production', 'prod'} else ''
+CSP_ENFORCE = os.getenv('CSP_ENFORCE', _csp_default).strip().lower() in {'1', 'true', 'yes'}
 CSP_POLICY = (
     "default-src 'self'; "
     "base-uri 'self'; "
@@ -231,10 +243,21 @@ CSP_POLICY = (
 CSP_HEADER_NAME = 'Content-Security-Policy' if CSP_ENFORCE else 'Content-Security-Policy-Report-Only'
 
 
+def _csp_policy_for_request():
+    nonce = getattr(g, 'csp_nonce', '')
+    if not nonce:
+        return CSP_POLICY
+    return CSP_POLICY.replace(
+        "script-src 'self';",
+        f"script-src 'self' 'nonce-{nonce}';",
+        1,
+    )
+
+
 @app.after_request
 def add_security_headers(response):
     """Attach browser hardening headers without logging request credentials."""
-    response.headers[CSP_HEADER_NAME] = CSP_POLICY
+    response.headers[CSP_HEADER_NAME] = _csp_policy_for_request()
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'

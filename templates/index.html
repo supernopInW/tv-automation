@@ -76,7 +76,7 @@
     <link rel="stylesheet" href="/static/auth.css?v=hardening1">
 
     <!-- ===== SCHEMA.ORG STRUCTURED DATA (JSON-LD) ===== -->
-    <script type="application/ld+json">
+    <script type="application/ld+json" nonce="{{ csp_nonce }}">
     [
       {
         "@context": "https://schema.org",
@@ -212,7 +212,7 @@
     <header role="banner" aria-label="ส่วนหัวระบบ T&V Automation" itemscope itemtype="https://schema.org/WPHeader">
         <div class="brand">
             <h1>
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align: middle;">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="csp-logo-mark">
                     <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#brand-grad)"/>
                     <path d="M2 17L12 22L22 17" stroke="url(#brand-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     <path d="M2 12L12 17L22 12" stroke="url(#brand-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -268,7 +268,7 @@
     <!-- พื้นที่รับผิดชอบ -->
     <section class="glass-card" id="setup-section" aria-labelledby="setup-heading" itemscope itemtype="https://schema.org/HowToStep">
         <span class="step-badge">พื้นที่รับผิดชอบ</span>
-        <h2 id="setup-heading" style="font-size: 1.25rem; font-weight: 800; margin-bottom: 0.5rem; color: var(--text-title);" itemprop="name">
+        <h2 id="setup-heading" class="csp-section-heading csp-heading-setup" itemprop="name">
             ขั้นที่ 1: กำหนดพื้นที่รับผิดชอบ
         </h2>
         <p class="geo-help">กำหนดก่อนอัปโหลดแผน · เจ้าหน้าที่เลือกตำบลที่รับผิดชอบ (1 หรือหลายตำบล) · ธุรการ/หัวหน้า = ทุกตำบลในอำเภอ</p>
@@ -276,7 +276,7 @@
         <div class="form-grid geo-grid">
             <div class="form-control-wrapper">
                 <label for="role-select">บทบาทผู้ใช้</label>
-                <select id="role-select" class="form-input" onchange="onRoleChange()">
+                <select id="role-select" class="form-input" data-csp-change="onRoleChange">
                     <option value="officer">เจ้าหน้าที่ประจำตำบล</option>
                     <option value="district_chief">เกษตรอำเภอ / หัวหน้า (ทุกตำบล)</option>
                     <option value="admin_clerk">ธุรการ (ไปกับหัวหน้า · ทุกตำบล)</option>
@@ -289,14 +289,14 @@
             </div>
             <div class="form-control-wrapper">
                 <label for="province-select">จังหวัด</label>
-                <select id="province-select" class="form-input" onchange="onProvincePicked()">
+                <select id="province-select" class="form-input" data-csp-change="onProvincePicked">
                     <option value="">— เลือกจังหวัด —</option>
                 </select>
                 <datalist id="province-list" hidden></datalist>
             </div>
             <div class="form-control-wrapper">
                 <label for="amphoe-select">อำเภอ / เขต</label>
-                <select id="amphoe-select" class="form-input" onchange="onAmphoePicked()">
+                <select id="amphoe-select" class="form-input" data-csp-change="onAmphoePicked">
                     <option value="">— เลือกอำเภอก่อน —</option>
                 </select>
                 <datalist id="amphoe-list" hidden></datalist>
@@ -308,12 +308,12 @@
             </div>
             <div class="form-control-wrapper">
                 <label for="office-staff-count">จำนวนสมาชิกสำนักงาน (คน)</label>
-                <input type="number" id="office-staff-count" class="form-input" min="1" max="99" value="7" placeholder="เช่น 7" onchange="onOfficeStaffCountChange()">
+                <input type="number" id="office-staff-count" class="form-input" min="1" max="99" value="7" placeholder="เช่น 7" data-csp-change="onOfficeStaffCountChange">
                 <span class="field-hint">จำนวนคนเป้าหมายสำหรับวันประชุมสำนักงาน (DM/WM)</span>
             </div>
         </div>
 
-        <div class="form-control-wrapper" id="tambon-multi-wrap" style="margin-top:1rem;">
+        <div class="form-control-wrapper csp-tambon-wrap" id="tambon-multi-wrap">
             <label>ตำบลที่รับผิดชอบ <span class="field-hint-inline">(หน่วยเล็กสุด = ตำบล · ติ๊กได้หลายตำบล)</span></label>
             <div class="resp-tambon-box" id="tambon-multi">
                 <div class="resp-tambon-actions">
@@ -330,7 +330,7 @@
 
         <div class="setup-summary" id="setup-summary">ยังไม่ได้ยืนยันพื้นที่รับผิดชอบ</div>
         <div class="setup-actions">
-            <button type="button" class="btn-glow" id="confirm-setup-btn" onclick="confirmResponsibilitySetup()">
+            <button type="button" class="btn-glow" id="confirm-setup-btn" data-csp-action="confirmResponsibilitySetup">
                 ยืนยันพื้นที่รับผิดชอบ แล้วไปอัปโหลด Excel
             </button>
         </div>
@@ -355,63 +355,63 @@
     <!-- STEP 1: PLAN CREATION OPTIONS -->
     <section class="glass-card" id="upload-section">
         <span class="step-badge">Step 1</span>
-        <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 1.25rem; color: var(--text-title); display: flex; align-items: center; gap: 0.5rem;">
+        <h2 class="csp-section-heading csp-plan-heading">
             เลือกวิธีสร้างแผนงานประจำเดือน
         </h2>
 
         <!-- Segmented Tab Switcher -->
-        <div class="plan-mode-tabs" style="display: flex; gap: 0.5rem; background: rgba(15, 23, 42, 0.6); padding: 0.35rem; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 1.25rem;">
-            <button type="button" class="plan-tab-btn active" id="tab-btn-excel" onclick="switchPlanCreationTab('excel')" style="flex: 1; padding: 0.75rem 1rem; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; transition: var(--transition);">
+        <div class="plan-mode-tabs csp-plan-mode-tabs">
+            <button type="button" class="plan-tab-btn active csp-plan-tab" id="tab-btn-excel" data-csp-action="switchPlanCreationTab" data-csp-value="excel">
                 📁 ทางเลือกที่ 1: อัปโหลดไฟล์ Excel
             </button>
-            <button type="button" class="plan-tab-btn" id="tab-btn-auto" onclick="switchPlanCreationTab('auto')" style="flex: 1; padding: 0.75rem 1rem; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; transition: var(--transition);">
+            <button type="button" class="plan-tab-btn csp-plan-tab" id="tab-btn-auto" data-csp-action="switchPlanCreationTab" data-csp-value="auto">
                 ✨ ทางเลือกที่ 2: สุ่มสร้างแผนอัตโนมัติบนเว็บ (กำหนดวันหยุดได้)
             </button>
         </div>
         
         <!-- PANEL 1: EXCEL UPLOAD -->
         <div id="plan-panel-excel" class="plan-panel-content">
-            <div id="drop-zone" class="upload-zone" ondragover="event.preventDefault()" ondrop="handleDrop(event)" onclick="document.getElementById('file-input').click()">
-                <input type="file" id="file-input" style="display: none;" accept=".xls,.xlsx" onchange="handleFileSelect(event)">
+            <div id="drop-zone" class="upload-zone" data-csp-dragover="true" data-csp-drop="handleDrop" data-csp-action="openFileInput">
+                <input type="file" id="file-input" class="csp-file-input-hidden" accept=".xls,.xlsx" data-csp-change="handleFileSelect">
                 <div class="upload-icon">📁</div>
                 <div class="upload-title" id="upload-placeholder">ลากไฟล์แผนเยี่ยมเยียนรายเดือนมาวาง หรือคลิกเลือกไฟล์ Excel</div>
-                <div class="upload-title" id="file-name-display" style="display: none; color: var(--success);"></div>
+                <div class="upload-title csp-file-name" id="file-name-display"></div>
                 <div class="upload-subtitle">รองรับไฟล์ Excel (.xls, .xlsx) · จันทร์ = ประชุมสำนักงาน · วันอื่น = งานภาคสนาม</div>
             </div>
             
-            <div class="upload-options" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-top: 1rem;">
+            <div class="upload-options csp-upload-options">
                 <label class="upload-opt-check" for="opt-random-moo-on-load">
                     <input type="checkbox" id="opt-random-moo-on-load" checked>
                     <span>
                         <strong>สุ่มหมู่/ตำบลในสถานที่</strong> หลังวิเคราะห์ตาราง
                     </span>
                 </label>
-                <button id="upload-btn" class="btn-glow" onclick="uploadExcelFile()" style="padding: 0.8rem 2rem;" disabled>
+                <button id="upload-btn" class="btn-glow csp-upload-btn" data-csp-action="uploadExcelFile" disabled>
                     📁 วิเคราะห์จาก Excel
                 </button>
             </div>
         </div>
 
         <!-- PANEL 2: AUTO GENERATE ON WEB -->
-        <div id="plan-panel-auto" class="plan-panel-content" style="display: none; background: rgba(15, 23, 42, 0.4); padding: 1.25rem; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.06);">
-            <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+        <div id="plan-panel-auto" class="plan-panel-content csp-auto-panel">
+            <div class="form-grid csp-auto-grid">
                 <div class="form-control-wrapper">
                     <label for="auto-plan-month">เลือกเดือนแผนงาน</label>
-                    <select id="auto-plan-month" class="form-input" onchange="renderHolidayDaysGrid()">
+                    <select id="auto-plan-month" class="form-input" data-csp-change="renderHolidayDaysGrid">
                         <!-- Current & next months populated dynamically -->
                     </select>
                 </div>
 
-                <div class="form-control-wrapper" style="grid-column: 1 / -1;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
-                        <label style="margin: 0; font-weight: 700; color: var(--text-title);">
+                <div class="form-control-wrapper csp-grid-full">
+                    <div class="csp-holiday-header">
+                        <label class="csp-holiday-label">
                             🏖️ กำหนดวันหยุดประจำเดือน (คลิกที่ปุ่มเลขวันที่เพื่อตั้งเป็นวันหยุด):
                         </label>
-                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                            <button type="button" class="btn-holiday-quick" onclick="autoSelectThaiHolidays()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem; border-radius: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; cursor: pointer; font-weight: 600;">
+                        <div class="csp-flex-gap-half-wrap">
+                            <button type="button" class="btn-holiday-quick btn-holiday-thai" data-csp-action="autoSelectThaiHolidays">
                                 🇹🇭 โหลดวันหยุดนักขัตฤกษ์ไทย
                             </button>
-                            <button type="button" class="btn-holiday-quick" onclick="clearSelectedHolidays()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem; border-radius: 8px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.12); color: var(--text-muted); cursor: pointer; font-weight: 600;">
+                            <button type="button" class="btn-holiday-quick btn-holiday-clear" data-csp-action="clearSelectedHolidays">
                                 ล้างวันหยุด
                             </button>
                         </div>
@@ -422,14 +422,14 @@
                         <!-- Rendered dynamically by JS -->
                     </div>
 
-                    <span class="field-hint" id="holiday-selected-hint" style="margin-top: 0.5rem;">
+                    <span class="field-hint csp-hint-top" id="holiday-selected-hint">
                         วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · คลิกที่ตัวเลขเพื่อเลือกวันหยุดนักขัตฤกษ์/วันหยุดพิเศษ/วันลาเพิ่มเติม
                     </span>
                 </div>
 
-                <div class="form-control-wrapper" style="grid-column: 1 / -1;">
+                <div class="form-control-wrapper csp-grid-full">
                     <label>การสุ่มกิจกรรมและสถานที่</label>
-                    <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 0.25rem;">
+                    <div class="csp-flex-gap-wide">
                         <span class="upload-opt-check" aria-live="polite">
                             <strong>สุ่มกิจกรรมภาคสนามจากประวัติ Excel</strong>
                             (ประเด็นเยี่ยมเยียน และถ่วงน้ำหนักตามข้อมูลเก่า)
@@ -442,20 +442,20 @@
                 </div>
             </div>
 
-            <div style="display: flex; justify-content: flex-end;">
-                <button id="btn-generate-auto-plan" class="btn-glow" onclick="generateAutoMonthPlanFromWebUI()" style="padding: 0.8rem 2.2rem; background: linear-gradient(135deg, #10b981, #059669);">
+            <div class="csp-actions-end">
+                <button id="btn-generate-auto-plan" class="btn-glow csp-auto-generate" data-csp-action="generateAutoMonthPlanFromWebUI">
                     ✨ สุ่มสร้างแผนประจำเดือนอัตโนมัติ
                 </button>
             </div>
         </div>
 
-        <p class="field-hint" id="upload-lock-hint" style="margin-top: 1rem;">กรุณายืนยันพื้นที่รับผิดชอบด้านบนก่อน</p>
+        <p class="field-hint csp-hint-top-lg" id="upload-lock-hint">กรุณายืนยันพื้นที่รับผิดชอบด้านบนก่อน</p>
     </section>
 
     <!-- STEP 2: CREDENTIALS & OPTIONS -->
     <section class="glass-card">
         <span class="step-badge">Step 2</span>
-        <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 1.5rem; color: var(--text-title);">
+        <h2 class="csp-section-heading csp-heading-spaced">
             การตั้งค่าและบัญชีเข้าระบบ DOAE T&V
         </h2>
         
@@ -476,7 +476,7 @@
 
             <div class="form-control-wrapper">
                 <label for="sheet-select">แผ่นงาน (เดือนแผนงาน)</label>
-                <select id="sheet-select" class="form-input" onchange="onSheetChange()">
+                <select id="sheet-select" class="form-input" data-csp-change="onSheetChange">
                     <!-- Loaded dynamically -->
                 </select>
             </div>
@@ -488,16 +488,16 @@
             </div>
         </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 2rem; padding-top: 1.5rem; flex-wrap: wrap; gap: 1.5rem;">
-            <div style="display: flex; gap: 2.5rem; flex-wrap: wrap;">
+        <div class="csp-plan-header">
+            <div class="csp-mode-controls">
                 <label class="toggle-switch-wrapper">
                     <input type="checkbox" id="headless" checked>
                     <span class="toggle-btn"></span>
                     <span>ซ่อนหน้าต่างเบราว์เซอร์อัตโนมัติ (Headless)</span>
                 </label>
                 
-                <div class="form-control-wrapper" style="flex-direction: row; align-items: center; gap: 1rem;">
-                    <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-right: 0.25rem;">โหมดทำงาน:</span>
+                <div class="form-control-wrapper csp-inline-controls">
+                    <span class="csp-mode-label">โหมดทำงาน:</span>
                     <div class="mode-segmented-control">
                         <label class="mode-option">
                             <input type="radio" name="run_mode" value="dry_run" checked>
@@ -528,18 +528,18 @@
     </section>
 
     <!-- STEP 3: PREVIEW & VERIFY GRID -->
-    <section class="glass-card" style="padding: 1.5rem;">
+    <section class="glass-card csp-table-section">
         <span class="step-badge">Step 3</span>
         
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem;">
-            <h2 style="font-size: 1.25rem; font-weight: 800; color: var(--text-title);">
+        <div class="csp-records-header">
+            <h2 class="csp-section-heading csp-table-heading">
                 ตารางสรุปแผนการกรอกข้อมูล (ตรวจทานความถูกต้องได้โดยตรง)
             </h2>
-            <span id="row-count" style="font-size: 0.85rem; font-weight: 600; color: var(--primary);">กรุณาอัปโหลดไฟล์ Excel</span>
+            <span id="row-count" class="csp-row-count">กรุณาอัปโหลดไฟล์ Excel</span>
             <div id="quick-stats" class="quick-stats"></div>
             <div id="bulk-tambon-actions" class="bulk-tambon-actions multi-tambon-only">
-                <button type="button" class="btn-bulk-tambon" onclick="toggleAllRowsUseAllTambons(true)">ใช้ทุกตำบลกับทุกแถว</button>
-                <button type="button" class="btn-bulk-tambon btn-bulk-tambon-muted" onclick="toggleAllRowsUseAllTambons(false)">ยกเลิก</button>
+                <button type="button" class="btn-bulk-tambon" data-csp-action="toggleAllRowsUseAllTambons" data-csp-value="true">ใช้ทุกตำบลกับทุกแถว</button>
+                <button type="button" class="btn-bulk-tambon btn-bulk-tambon-muted" data-csp-action="toggleAllRowsUseAllTambons" data-csp-value="false">ยกเลิก</button>
             </div>
         </div>
 
@@ -551,7 +551,7 @@
             <table>
                 <thead>
                     <tr>
-                        <th class="text-center" style="width: 50px;">แถว</th>
+                        <th class="text-center csp-col-index">แถว</th>
                         <th class="row-date-col">วันที่</th>
                         <th class="row-issue-col">ประเด็นงาน (Issue)</th>
                         <th class="row-activity-col">กิจกรรมหลัก (Activity)</th>
@@ -567,11 +567,11 @@
                 </tbody>
             </table>
         </div>
-        <div style="display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; padding: 1.25rem 0 0.5rem 0;">
-            <button type="button" class="btn-add-row" onclick="addNewRow()">➕ เพิ่มแถวใหม่</button>
-            <button type="button" class="btn-add-row" onclick="generateMonthScheduleOnWeb()" style="background: rgba(139, 92, 246, 0.18); border-color: var(--primary);">📅 สร้างแผนทั้งเดือนอัตโนมัติ</button>
-            <button type="button" class="btn-add-row" onclick="exportPlanToExcel()" style="background: rgba(16, 185, 129, 0.18); border-color: var(--success);">📥 ส่งออกไฟล์ (CSV/Excel)</button>
-            <button type="button" class="btn-add-row" onclick="clearPlanTable()" style="background: rgba(239, 68, 68, 0.18); border-color: var(--error);">🗑️ ล้างตาราง</button>
+        <div class="csp-table-actions">
+            <button type="button" class="btn-add-row" data-csp-action="addNewRow">➕ เพิ่มแถวใหม่</button>
+            <button type="button" class="btn-add-row csp-action-schedule" data-csp-action="generateMonthScheduleOnWeb">📅 สร้างแผนทั้งเดือนอัตโนมัติ</button>
+            <button type="button" class="btn-add-row csp-action-export" data-csp-action="exportPlanToExcel">📥 ส่งออกไฟล์ (CSV/Excel)</button>
+            <button type="button" class="btn-add-row csp-action-clear" data-csp-action="clearPlanTable">🗑️ ล้างตาราง</button>
         </div>
     </section>
 
@@ -579,7 +579,7 @@
     <section class="terminal-container">
         <div class="terminal-header">
             <span>Terminal Realtime Stream logs</span>
-            <span id="log-status" style="color: var(--text-muted);">Idle</span>
+            <span id="log-status" class="csp-log-status">Idle</span>
         </div>
         <div id="console-logs" class="terminal-logs">
             <div class="log-line">
@@ -677,10 +677,10 @@
 
     <footer class="app-footer" role="contentinfo" aria-label="ข้อมูลระบบและผู้พัฒนา" itemscope itemtype="https://schema.org/WPFooter">
         <div class="footer-credit-box">
-            <address class="footer-dev-name" itemprop="author" itemscope itemtype="https://schema.org/Person" style="font-style:normal;">
+            <address class="footer-dev-name footer-dev-address" itemprop="author" itemscope itemtype="https://schema.org/Person">
                 <span aria-hidden="true">👨‍🌾</span>
                 ออกแบบและพัฒนาโดย:
-                <strong itemprop="name"><a href="#" itemprop="url" rel="author" style="color:inherit;text-decoration:none;">นายนพฤทธิ์ น้อยเล็น</a></strong>
+                <strong itemprop="name"><a href="#" itemprop="url" rel="author" class="footer-dev-link">นายนพฤทธิ์ น้อยเล็น</a></strong>
                 (<span itemprop="jobTitle">นักวิชาการส่งเสริมการเกษตรปฏิบัติการ</span>)
                 <span itemprop="affiliation" itemscope itemtype="https://schema.org/GovernmentOrganization">
                     — <span itemprop="name">สำนักงานเกษตรอำเภอสีดา</span>
@@ -703,8 +703,9 @@
 
 </div><!-- /div.container -->
 
-<script src="/static/auth.js?v=hardening1"></script>
-<script src="/static/app.js?v=area3"></script>
+    <script src="/static/auth.js?v=hardening1"></script>
+    <script src="/static/csp-bindings.js?v=csp1"></script>
+    <script src="/static/app.js?v=area3"></script>
 
 </body>
 </html>

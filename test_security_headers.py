@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import tempfile
 import time
 
@@ -40,6 +41,17 @@ def test_security_headers_and_csp_report_only():
     assert 'geolocation=()' in headers['Permissions-Policy']
     assert headers['Cache-Control'] == 'no-store'
     assert 'TANDV_PASSWORD' not in headers
+
+
+def test_index_json_ld_nonce_matches_csp_header():
+    client = app.test_client()
+    response = client.get('/')
+    assert response.status_code == 200
+    csp = response.headers['Content-Security-Policy-Report-Only']
+    nonce_match = re.search(r"'nonce-([^']+)'", csp)
+    assert nonce_match is not None
+    html = response.get_data(as_text=True)
+    assert f'nonce="{nonce_match.group(1)}"' in html
 
 
 def test_access_status_exposes_csrf_token_without_authentication():
@@ -110,28 +122,32 @@ def test_auth_login_and_mutation_require_csrf_token():
         app_module.APP_AUTH_PASSWORD_HASH = old_hash
 
 
-def test_upload_rejects_disallowed_extension_and_invalid_magic_bytes(monkeypatch):
-    monkeypatch.setattr(app_module, 'APP_AUTH_REQUIRED', False)
-    client = app.test_client()
-    csrf = _csrf_token(client)
+def test_upload_rejects_disallowed_extension_and_invalid_magic_bytes():
+    old_required = app_module.APP_AUTH_REQUIRED
+    try:
+        app_module.APP_AUTH_REQUIRED = False
+        client = app.test_client()
+        csrf = _csrf_token(client)
 
-    bad_extension = client.post(
-        '/api/upload',
-        headers={'X-CSRF-Token': csrf},
-        data={'file': (io.BytesIO(b'not-an-excel-file'), 'payload.txt')},
-        content_type='multipart/form-data',
-    )
-    assert bad_extension.status_code == 400
-    assert 'ไม่สามารถตรวจสอบ' in bad_extension.get_json()['error'] or 'รูปแบบไฟล์' in bad_extension.get_json()['error']
+        bad_extension = client.post(
+            '/api/upload',
+            headers={'X-CSRF-Token': csrf},
+            data={'file': (io.BytesIO(b'not-an-excel-file'), 'payload.txt')},
+            content_type='multipart/form-data',
+        )
+        assert bad_extension.status_code == 400
+        assert 'ไม่สามารถตรวจสอบ' in bad_extension.get_json()['error'] or 'รูปแบบไฟล์' in bad_extension.get_json()['error']
 
-    bad_magic = client.post(
-        '/api/upload',
-        headers={'X-CSRF-Token': csrf},
-        data={'file': (io.BytesIO(b'not-a-zip-package'), 'payload.xlsx')},
-        content_type='multipart/form-data',
-    )
-    assert bad_magic.status_code == 400
-    assert 'ไม่สามารถตรวจสอบ' in bad_magic.get_json()['error']
+        bad_magic = client.post(
+            '/api/upload',
+            headers={'X-CSRF-Token': csrf},
+            data={'file': (io.BytesIO(b'not-a-zip-package'), 'payload.xlsx')},
+            content_type='multipart/form-data',
+        )
+        assert bad_magic.status_code == 400
+        assert 'ไม่สามารถตรวจสอบ' in bad_magic.get_json()['error']
+    finally:
+        app_module.APP_AUTH_REQUIRED = old_required
 
 
 def test_upload_registry_binds_path_to_owner():
@@ -246,6 +262,7 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
 if __name__ == '__main__':
     tests = [
         test_security_headers_and_csp_report_only,
+        test_index_json_ld_nonce_matches_csp_header,
         test_access_status_exposes_csrf_token_without_authentication,
         test_protected_endpoint_requires_app_session_when_auth_enabled,
         test_auth_login_and_mutation_require_csrf_token,

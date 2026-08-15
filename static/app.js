@@ -870,8 +870,8 @@ function rebuildMooPanel() {
     const pool = moosFromVillages(geoState.villages);
     const extras = geoState.moos.filter(m => !pool.includes(m));
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล${geoState.tambonName || ''} (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">เลือกตำบลก่อน — จะแสดงเฉพาะหมู่ที่มีจริง</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล${geoState.tambonName || ''} (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header">เลือกตำบลก่อน — จะแสดงเฉพาะหมู่ที่มีจริง</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> หมู่ ${escapeAttr(v)}</label>`;
     });
@@ -919,7 +919,7 @@ function rebuildVillagePanel() {
     const selected = new Set(geoState.selectedVillages);
     const list = geoState.villages || [];
     if (!list.length) {
-        panel.innerHTML = '<div class="multi-select-option" style="cursor:default;opacity:0.7;">ยังไม่มีรายการ — พิมพ์เพิ่มด้านล่าง</div>';
+        panel.innerHTML = '<div class="multi-select-option csp-empty-multi-option">ยังไม่มีรายการ — พิมพ์เพิ่มด้านล่าง</div>';
         return;
     }
     let html = list.map(v => {
@@ -1762,7 +1762,7 @@ async function renderPlaceBuilder(rowIdx) {
         <button type="button" class="btn-place-add-all" id="place-add-all-${rowIdx}" ${tambonCount ? '' : 'disabled'} title="ใส่ทุกตำบลในอำเภอ (ไม่สุ่มหมู่)">+ ทุกตำบล</button>
         <button type="button" class="btn-place-random-moo" id="place-random-moo-${rowIdx}" ${coverAll || !tambonCount ? 'disabled' : ''} title="สุ่ม 2–4 หมู่ จากหมู่บ้านจริงของตำบลที่รับผิดชอบ">สุ่มหมู่ 2–4</button>
         ${isMultiTambonRole() ? `<label class="row-use-all-tambons multi-tambon-only" title="ขยายส่งทีละตำบลในหัวแผน T&V">
-            <input type="checkbox" id="use-all-tambons-${rowIdx}" ${rec.useAllTambons ? 'checked' : ''} onchange="syncRowUseAllTambonsUi(${rowIdx})">
+            <input type="checkbox" id="use-all-tambons-${rowIdx}" ${rec.useAllTambons ? 'checked' : ''} data-csp-change="syncRowUseAllTambonsUi" data-csp-row-index="${rowIdx}">
             ขยายทีละตำบล
         </label>` : ''}
     </div>`;
@@ -1878,8 +1878,8 @@ async function rebuildPlaceMooPanel(rowIdx, partIdx) {
         }
     }
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล${tb} (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:#fbbf24;">ยังไม่มีข้อมูลหมู่บ้านของตำบลนี้</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล${tb} (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header csp-multi-header-warning">ยังไม่มีข้อมูลหมู่บ้านของตำบลนี้</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> ม.${escapeAttr(v)}</label>`;
     });
@@ -1924,7 +1924,7 @@ async function togglePlaceMooPanel(rowIdx, partIdx) {
     const panel = document.querySelector(`#place-builder-${rowIdx} .place-moo-panel[data-part="${partIdx}"]`);
     if (!panel) return;
     panel.hidden = false;
-    panel.innerHTML = '<div style="padding:0.35rem;font-size:0.75rem;color:var(--text-muted);">กำลังโหลดหมู่บ้าน...</div>';
+    panel.innerHTML = '<div class="csp-loading-option">กำลังโหลดหมู่บ้าน...</div>';
     await rebuildPlaceMooPanel(rowIdx, partIdx);
     panel.hidden = false;
 }
@@ -2029,13 +2029,13 @@ function rebuildRowMooPanel(rowIdx) {
         return `<label class="multi-select-option"><input type="checkbox" data-kind="village" value="${escapeAttr(name)}" data-moo="${escapeAttr(v.moo || '')}" ${checked}> ${escapeAttr(label)}</label>`;
     }).join('');
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">ยังไม่มีข้อมูลหมู่บ้าน</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header">ยังไม่มีข้อมูลหมู่บ้าน</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" data-kind="moo" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> ม.${escapeAttr(v)}</label>`;
     });
     if (villageOpts) {
-        html += '<div style="padding:0.35rem 0.45rem 0.15rem;font-size:0.72rem;color:var(--text-muted);border-top:1px solid rgba(148,163,184,0.2);margin-top:0.2rem;">หมู่บ้าน</div>';
+        html += '<div class="csp-village-header">หมู่บ้าน</div>';
         html += villageOpts;
     }
     html += `<div class="multi-select-actions">
@@ -2342,13 +2342,13 @@ function renderTable(records) {
         const tambonVal = rec.tambon || geoState.tambonName || '';
         const useAll = !!rec.useAllTambons;
         tr.innerHTML = `
-            <td class="text-center" style="font-weight: 700; color: var(--text-muted);">${rec.id}</td>
+            <td class="text-center csp-row-index">${rec.id}</td>
             <td class="row-date-col">
-                <input type="text" class="cell-input" id="date-${idx}" value="${rec.date || ''}" style="text-align: center;" title="${rec.date || ''}" onchange="onRowDateChanged(${idx})">
+                <input type="text" class="cell-input csp-date-input" id="date-${idx}" value="${rec.date || ''}" title="${rec.date || ''}" data-csp-change="onRowDateChanged" data-csp-row-index="${idx}">
             </td>
             <td class="row-issue-col">
                 <div class="cell-stack">
-                    <select class="cell-input cell-select" id="issue-${idx}" onchange="onIssueChange(${idx}); syncSelectFulltext('issue-${idx}')">
+                    <select class="cell-input cell-select" id="issue-${idx}" data-csp-change="onIssueChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="issue-${idx}">
                         ${issueOptionsHtml}
                     </select>
                     <div class="cell-fulltext" id="issue-${idx}-fulltext"></div>
@@ -2356,15 +2356,15 @@ function renderTable(records) {
             </td>
             <td class="row-activity-col">
                 <div class="cell-stack">
-                    <select class="cell-input cell-select" id="activity-select-${idx}" onchange="syncSelectFulltext('activity-select-${idx}')"></select>
+                    <select class="cell-input cell-select" id="activity-select-${idx}" data-csp-change="syncSelectFulltext" data-csp-target-id="activity-select-${idx}"></select>
                     <div class="cell-fulltext" id="activity-select-${idx}-fulltext"></div>
                 </div>
             </td>
             <td class="row-details-col">
                 <div class="desc-combo">
-                    <select class="cell-input cell-select" id="desc-select-${idx}" onchange="onDescChange(${idx}); syncSelectFulltext('desc-select-${idx}')"></select>
+                    <select class="cell-input cell-select" id="desc-select-${idx}" data-csp-change="onDescChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="desc-select-${idx}"></select>
                     <div class="cell-fulltext" id="desc-select-${idx}-fulltext"></div>
-                    <textarea class="cell-input" id="activity-${idx}" style="min-height: 64px; resize: vertical; display: none;" placeholder="พิมพ์รายละเอียด...">${rec.activity || ''}</textarea>
+                    <textarea class="cell-input csp-activity-textarea" id="activity-${idx}" placeholder="พิมพ์รายละเอียด...">${rec.activity || ''}</textarea>
                 </div>
             </td>
             <td class="row-location-col">
@@ -2379,7 +2379,7 @@ function renderTable(records) {
                 <span class="status-badge badge-ready">พร้อมกรอก</span>
             </td>
             <td class="row-action-col text-center">
-                <button class="btn-delete-row" onclick="deleteRow(${idx})" title="ลบแถวนี้">🗑️</button>
+                <button class="btn-delete-row" data-csp-action="deleteRow" data-csp-row-index="${idx}" title="ลบแถวนี้">🗑️</button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -3393,7 +3393,7 @@ function renderHolidayDaysGrid() {
         if (isWeekend) classes += ' is-weekend';
         if (isHoliday) classes += ' is-holiday';
 
-        const clickHandler = isWeekend ? '' : `onclick="toggleHolidayDay(${d})"`;
+        const clickHandler = isWeekend ? '' : `data-csp-action="toggleHolidayDay" data-csp-day="${d}"`;
 
         html += `
             <button type="button" class="${classes}" ${clickHandler} title="${d} (วัน${dayShortNames[dayOfWeek]})">
@@ -3457,7 +3457,7 @@ function updateHolidayHintText() {
     if (!hint) return;
     const list = Array.from(selectedHolidaysSet).sort((a, b) => a - b);
     if (list.length > 0) {
-        hint.innerHTML = `วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · <strong style="color:#fca5a5;">เลือกวันหยุดแล้ว (${list.length} วัน): วันที่ ${list.join(', ')}</strong>`;
+        hint.innerHTML = `วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · <strong class="csp-holiday-selected">เลือกวันหยุดแล้ว (${list.length} วัน): วันที่ ${list.join(', ')}</strong>`;
     } else {
         hint.textContent = 'วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · คลิกที่ตัวเลขเพื่อเลือกวันหยุดนักขัตฤกษ์/วันหยุดพิเศษ/วันลาเพิ่มเติม';
     }

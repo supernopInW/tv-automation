@@ -1,6 +1,6 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
-> **Last Updated:** 2026-08-15
+> **Last Updated:** 2026-08-16
 > **Version:** 1.0.0
 
 ---
@@ -301,14 +301,14 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - เพิ่ม CSP แบบ Report-Only ใน `app.py` ผ่าน `Content-Security-Policy-Report-Only` โดยนโยบายอนุญาตเฉพาะ same-origin scripts/connections, Google Fonts ที่จำเป็น, data/blob image ตามการใช้งาน และปิด object/embed, frame, inline script attributes และ inline style attributes.
 - เพิ่ม `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` แบบปิดกล้อง/ไมโครโฟน/geolocation/payment/USB และ HSTS.
 - API responses ตั้ง `Cache-Control: no-store` เพื่อลดการ cache ข้อมูลแผนงานและผลลัพธ์ที่อาจมีข้อมูลส่วนบุคคล.
-- ใช้ `CSP_ENFORCE=1` เพื่อเปลี่ยนเป็น `Content-Security-Policy` แบบบังคับได้ภายหลัง แต่ห้ามเปิดจนกว่าจะย้าย inline event handlers, inline style attributes และ JSON-LD inline script หรือปรับให้ใช้ nonce/hash/external files แล้วตรวจ browser violations ครบ.
+- หลังย้าย inline event handlers/styles แล้ว ใช้ per-request nonce กับ JSON-LD ใน `app.py`; `CSP_ENFORCE=1` จะเป็นค่าเริ่มต้นเมื่อ `APP_ENV=production` และยังสามารถ override ได้ด้วย environment variable. ต้องตรวจ browser violations ก่อน deploy.
 - เพิ่ม `test_security_headers.py` และผูกเข้า Security Gate; CSP unit test, existing Workflow 26 tests, credential cleanup test, py_compile, node syntax check และ git diff check ผ่านใน sandbox.
 
 
 ## 22. Access Boundary, Upload Hardening และ Private Artifacts (2026-08-15)
 
 - เพิ่ม `Flask-Limiter[redis]==4.1.1` ใน `requirements.txt` เพื่อให้ rate limiting ใช้งานได้ทั้ง memory storage สำหรับ development และ Redis storage สำหรับ production.
-- เพิ่ม application authentication boundary แบบ opt-in ผ่าน `APP_AUTH_REQUIRED=1`; เมื่อเปิดใช้งานต้อง login ผ่าน `/api/auth/login` และ protected API ที่ไม่มี session จะตอบกลับโดยไม่เปิดเผยรายละเอียดภายใน. ค่าเริ่มต้น `APP_AUTH_REQUIRED=0` เพื่อคงพฤติกรรมเดิม.
+- เพิ่ม application authentication boundary ผ่าน `APP_AUTH_REQUIRED=1`; เมื่อเปิดใช้งานต้อง login ผ่าน `/api/auth/login` และ protected API ที่ไม่มี session จะตอบกลับโดยไม่เปิดเผยรายละเอียดภายใน. ค่าเริ่มต้นปัจจุบัน `APP_AUTH_REQUIRED=1` แบบ fail-closed.
 - เพิ่ม session cookie hardening, CSRF token สำหรับ mutation requests และ rate limits สำหรับ login, upload, records, add-row และ run automation. ห้ามบันทึก password, T&V username หรือ Gemini API key ลง Web Storage.
 - Upload ใช้ opaque `upload_id`, ตรวจ extension และ magic bytes/ZIP structure, จำกัดขนาด, ผูก owner กับ session และล้างตาม TTL. ห้ามใช้ชื่อไฟล์จาก client เป็น path โดยตรง.
 - Portal screenshots ห้ามเขียนลง `static/` หรือเผยแพร่ผ่าน URL สาธารณะ; diagnostics ที่ส่งผ่าน SSE ต้องเป็นข้อความที่จำเป็นเท่านั้น และ frontend ต้องไม่โหลด URL screenshot ที่ไม่ได้รับอนุญาต.
