@@ -19,6 +19,7 @@ import json
 import os
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
+
 import geo_data
 
 APP_SESSION_SECRET = os.environ.get('APP_SESSION_SECRET', '').strip()
@@ -31,6 +32,7 @@ app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_BYTES', str(10 * 1024 * 1024)))
+
 
 APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '1').strip().lower() in {'1', 'true', 'yes'}
 APP_AUTH_USERNAME = os.environ.get('APP_AUTH_USERNAME', '').strip()

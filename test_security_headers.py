@@ -12,6 +12,7 @@ os.environ['APP_ENV'] = 'test'
 os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
 os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
 
+
 import app as app_module
 from app import app
 
@@ -52,6 +53,7 @@ def test_index_json_ld_nonce_matches_csp_header():
     assert nonce_match is not None
     html = response.get_data(as_text=True)
     assert f'nonce="{nonce_match.group(1)}"' in html
+
 
 
 def test_access_status_exposes_csrf_token_without_authentication():
@@ -174,6 +176,7 @@ def test_upload_registry_binds_path_to_owner():
             pass
 
 
+
 def test_server_side_profile_rejects_client_supplied_scope_and_submit():
     old_required = app_module.APP_AUTH_REQUIRED
     old_username = app_module.APP_AUTH_USERNAME
@@ -247,6 +250,8 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert 'gemini' not in backend_source.lower()
     assert 'google-genai' not in requirements_source.lower()
     assert 'gemini' not in template_source.lower()
+    assert "localStorage.setItem('gemini_api_key'" not in source
+    assert "localStorage.getItem('gemini_api_key'" not in source
     assert '/static/${shot_name}' not in backend_source
     assert 'screenshot(path=' not in backend_source
     assert 'screenshot(path=' not in cli_source

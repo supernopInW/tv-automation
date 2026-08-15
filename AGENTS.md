@@ -386,3 +386,10 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - Advanced Security CodeQL พบ high alert ใน `Ready_For_GitHub` ซึ่งเป็น export/archive ที่ไม่ถูก deploy โดยตรง ขณะที่ production source อยู่ที่ repository root และ custom Security Gate ก็ exclude archive นี้อยู่แล้ว.
 - เพิ่ม `.github/codeql/codeql-config.yml` และผูกกับ CodeQL init เพื่อสแกน source root ที่ deploy จริงเต็มชุด พร้อม exclude เฉพาะ `Ready_For_GitHub/**` และ `Upload_To_GitHub/**`. ห้ามใช้ scope นี้เพื่อซ่อน finding ใน root production source.
 - Root และ Ready_For_GitHub ยังคงถูก sync สำหรับการส่งออก และ frontend inline scan, syntax checks, Semgrep/secret checks ใน Security Gate ยังคงทำงานตาม workflow.
+
+
+## 30. PR #4 Conflict Resolution with main (2026-08-16)
+
+- `origin/main` advanced to `16f02dd` with overlapping P0/P1 auth, CSRF, upload, rate-limit and test changes; PR #4 was 12 commits ahead and 1 commit behind, causing conflicts in workflow, app, frontend, template, requirements and tests.
+- Resolution kept the PR's fail-closed `APP_AUTH_REQUIRED=1` profile/ACL, local rules-only parser with no Gemini integration, CSP nonce/delegated bindings, exact dependency pins, Docker validation and CodeQL scope. The older opt-in auth/Gemini blocks from main were not reintroduced.
+- A duplicate Flask route block exposed by the combined files was removed; the four test suites pass with 25 tests. No T&V credentials were used and no Draft/Submit operation was performed.
