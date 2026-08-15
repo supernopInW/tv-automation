@@ -2351,67 +2351,146 @@ function relocateForTambon(baseLocation, oldTambon, newTambon, moos, villages) {
 
 function renderTable(records) {
     const tbody = document.getElementById('table-body');
-    tbody.innerHTML = '';
+    tbody.textContent = '';
     buildDescPresets(records);
-    const multi = isMultiTambonRole();
+
+    const createFulltextBox = (id) => {
+        const box = document.createElement('div');
+        box.className = 'cell-fulltext';
+        box.id = id;
+        return box;
+    };
 
     records.forEach((rec, idx) => {
         const tr = document.createElement('tr');
         tr.id = `row-${idx}`;
-        let issueOptionsHtml = '';
-        for (const [val, label] of Object.entries(issueOptions)) {
-            const selected = val === String(rec.issue_val) ? 'selected' : '';
-            issueOptionsHtml += `<option value="${escapeAttr(val)}" ${selected}>${escapeHtml(label)}</option>`;
-        }
+
+        const idCell = document.createElement('td');
+        idCell.className = 'text-center csp-row-index';
+        idCell.textContent = String(rec.id ?? '');
+        tr.appendChild(idCell);
+
+        const dateCell = document.createElement('td');
+        dateCell.className = 'row-date-col';
+        const dateInput = document.createElement('input');
+        dateInput.type = 'text';
+        dateInput.className = 'cell-input csp-date-input';
+        dateInput.id = `date-${idx}`;
+        dateInput.value = rec.date || '';
+        dateInput.title = rec.date || '';
+        dateInput.dataset.cspChange = 'onRowDateChanged';
+        dateInput.dataset.cspRowIndex = String(idx);
+        dateCell.appendChild(dateInput);
+        tr.appendChild(dateCell);
+
         const tambonVal = rec.tambon || geoState.tambonName || '';
-        const useAll = !!rec.useAllTambons;
-        const rowIdText = escapeHtml(rec.id);
-        const dateValue = escapeAttr(rec.date || '');
-        const activityText = escapeHtml(rec.activity || '');
-        const tambonValue = escapeAttr(bareTambonName(tambonVal));
-        const targetValue = escapeAttr(rec.target_num || 0);
-        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
-        tr.innerHTML = `
-            <td class="text-center csp-row-index">${rowIdText}</td>
-            <td class="row-date-col">
-                <input type="text" class="cell-input csp-date-input" id="date-${idx}" value="${dateValue}" title="${dateValue}" data-csp-change="onRowDateChanged" data-csp-row-index="${idx}">
-            </td>
-            <td class="row-issue-col">
-                <div class="cell-stack">
-                    <select class="cell-input cell-select" id="issue-${idx}" data-csp-change="onIssueChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="issue-${idx}">
-                        ${issueOptionsHtml}
-                    </select>
-                    <div class="cell-fulltext" id="issue-${idx}-fulltext"></div>
-                </div>
-            </td>
-            <td class="row-activity-col">
-                <div class="cell-stack">
-                    <select class="cell-input cell-select" id="activity-select-${idx}" data-csp-change="syncSelectFulltext" data-csp-target-id="activity-select-${idx}"></select>
-                    <div class="cell-fulltext" id="activity-select-${idx}-fulltext"></div>
-                </div>
-            </td>
-            <td class="row-details-col">
-                <div class="desc-combo">
-                    <select class="cell-input cell-select" id="desc-select-${idx}" data-csp-change="onDescChange" data-csp-row-index="${idx}" data-csp-after="syncSelectFulltext" data-csp-target-id="desc-select-${idx}"></select>
-                    <div class="cell-fulltext" id="desc-select-${idx}-fulltext"></div>
-                    <textarea class="cell-input csp-activity-textarea" id="activity-${idx}" placeholder="พิมพ์รายละเอียด...">${activityText}</textarea>
-                </div>
-            </td>
-            <td class="row-location-col">
-                <div class="place-builder" id="place-builder-${idx}"></div>
-                <div class="location-preview place-final-preview" id="location-preview-${idx}" title="ข้อความที่จะกรอกใน PD_PLACE"></div>
-                <input type="hidden" id="tambon-${idx}" value="${tambonValue}">
-            </td>
-            <td class="row-target-col text-center">
-                <input type="number" class="cell-input text-center" id="target-${idx}" value="${targetValue}">
-            </td>
-            <td class="row-status-col text-center" id="status-${idx}">
-                <span class="status-badge badge-ready">พร้อมกรอก</span>
-            </td>
-            <td class="row-action-col text-center">
-                <button class="btn-delete-row" data-csp-action="deleteRow" data-csp-row-index="${idx}" title="ลบแถวนี้">🗑️</button>
-            </td>
-        `;
+        const issueCell = document.createElement('td');
+        issueCell.className = 'row-issue-col';
+        const issueStack = document.createElement('div');
+        issueStack.className = 'cell-stack';
+        const issueSelect = document.createElement('select');
+        issueSelect.className = 'cell-input cell-select';
+        issueSelect.id = `issue-${idx}`;
+        issueSelect.dataset.cspChange = 'onIssueChange';
+        issueSelect.dataset.cspRowIndex = String(idx);
+        issueSelect.dataset.cspAfter = 'syncSelectFulltext';
+        issueSelect.dataset.cspTargetId = issueSelect.id;
+        Object.entries(issueOptions).forEach(([val, label]) => {
+            const option = document.createElement('option');
+            option.value = val;
+            option.textContent = label;
+            option.selected = val === String(rec.issue_val);
+            issueSelect.appendChild(option);
+        });
+        issueStack.appendChild(issueSelect);
+        issueStack.appendChild(createFulltextBox(`${issueSelect.id}-fulltext`));
+        issueCell.appendChild(issueStack);
+        tr.appendChild(issueCell);
+
+        const activityCell = document.createElement('td');
+        activityCell.className = 'row-activity-col';
+        const activityStack = document.createElement('div');
+        activityStack.className = 'cell-stack';
+        const activitySelect = document.createElement('select');
+        activitySelect.className = 'cell-input cell-select';
+        activitySelect.id = `activity-select-${idx}`;
+        activitySelect.dataset.cspChange = 'syncSelectFulltext';
+        activitySelect.dataset.cspTargetId = activitySelect.id;
+        activityStack.appendChild(activitySelect);
+        activityStack.appendChild(createFulltextBox(`${activitySelect.id}-fulltext`));
+        activityCell.appendChild(activityStack);
+        tr.appendChild(activityCell);
+
+        const detailsCell = document.createElement('td');
+        detailsCell.className = 'row-details-col';
+        const descCombo = document.createElement('div');
+        descCombo.className = 'desc-combo';
+        const descSelect = document.createElement('select');
+        descSelect.className = 'cell-input cell-select';
+        descSelect.id = `desc-select-${idx}`;
+        descSelect.dataset.cspChange = 'onDescChange';
+        descSelect.dataset.cspRowIndex = String(idx);
+        descSelect.dataset.cspAfter = 'syncSelectFulltext';
+        descSelect.dataset.cspTargetId = descSelect.id;
+        descCombo.appendChild(descSelect);
+        descCombo.appendChild(createFulltextBox(`${descSelect.id}-fulltext`));
+        const activityArea = document.createElement('textarea');
+        activityArea.className = 'cell-input csp-activity-textarea';
+        activityArea.id = `activity-${idx}`;
+        activityArea.placeholder = 'พิมพ์รายละเอียด...';
+        activityArea.value = rec.activity || '';
+        descCombo.appendChild(activityArea);
+        detailsCell.appendChild(descCombo);
+        tr.appendChild(detailsCell);
+
+        const locationCell = document.createElement('td');
+        locationCell.className = 'row-location-col';
+        const placeBuilder = document.createElement('div');
+        placeBuilder.className = 'place-builder';
+        placeBuilder.id = `place-builder-${idx}`;
+        locationCell.appendChild(placeBuilder);
+        const locationPreview = document.createElement('div');
+        locationPreview.className = 'location-preview place-final-preview';
+        locationPreview.id = `location-preview-${idx}`;
+        locationPreview.title = 'ข้อความที่จะกรอกใน PD_PLACE';
+        locationCell.appendChild(locationPreview);
+        const tambonInput = document.createElement('input');
+        tambonInput.type = 'hidden';
+        tambonInput.id = `tambon-${idx}`;
+        tambonInput.value = bareTambonName(tambonVal);
+        locationCell.appendChild(tambonInput);
+        tr.appendChild(locationCell);
+
+        const targetCell = document.createElement('td');
+        targetCell.className = 'row-target-col text-center';
+        const targetInput = document.createElement('input');
+        targetInput.type = 'number';
+        targetInput.className = 'cell-input text-center';
+        targetInput.id = `target-${idx}`;
+        targetInput.value = rec.target_num || 0;
+        targetCell.appendChild(targetInput);
+        tr.appendChild(targetCell);
+
+        const statusCell = document.createElement('td');
+        statusCell.className = 'row-status-col text-center';
+        statusCell.id = `status-${idx}`;
+        const status = document.createElement('span');
+        status.className = 'status-badge badge-ready';
+        status.textContent = 'พร้อมกรอก';
+        statusCell.appendChild(status);
+        tr.appendChild(statusCell);
+
+        const actionCell = document.createElement('td');
+        actionCell.className = 'row-action-col text-center';
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'btn-delete-row';
+        deleteButton.dataset.cspAction = 'deleteRow';
+        deleteButton.dataset.cspRowIndex = String(idx);
+        deleteButton.title = 'ลบแถวนี้';
+        deleteButton.textContent = '🗑️';
+        actionCell.appendChild(deleteButton);
+        tr.appendChild(actionCell);
+
         tbody.appendChild(tr);
         ensureRowGeoFields(rec);
         if (!isOfficeWorkRecord(rec) && !rec.placeParts?.length) {
