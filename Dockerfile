@@ -13,9 +13,9 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 RUN playwright install chromium
 
-RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin appuser \
-    && mkdir -p /tmp/tv-automation-uploads \
-    && chown -R appuser:appuser /tmp/tv-automation-uploads
+RUN groupadd --system appuser \
+    && useradd --system --create-home --gid appuser --shell /usr/sbin/nologin appuser \
+    && install -d -o appuser -g appuser -m 700 /tmp/tv-automation-uploads
 
 COPY --chown=appuser:appuser . /code
 USER appuser

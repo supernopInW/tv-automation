@@ -9,7 +9,7 @@ services:
     # Keep the application behind a local reverse proxy/firewall by default.
     ports:
       - "127.0.0.1:7860:7860"
-    user: "1000:1000"
+    user: "appuser:appuser"
     environment:
       - PORT=7860
       - HEADLESS=1

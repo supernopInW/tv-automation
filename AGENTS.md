@@ -358,3 +358,10 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - Semgrep baseline scan เดิมรายงาน legacy `innerHTML` sinks ที่ถูกย้ายบรรทัดระหว่าง CSP refactor; เพิ่ม `nosemgrep: tv-automation-no-dynamic-innerhtml` เฉพาะจุดที่ตรวจแล้ว เพื่อไม่บล็อก legacy sinks แต่ยังทำให้ sink ใหม่โดยไม่มี reviewed annotation ล้มเหลวใน CI.
 - แก้ manual runner ของ `test_security_headers.py` ไม่ให้พึ่ง pytest `monkeypatch` fixture เพื่อให้คำสั่งที่ระบุใน Security Gate ทำงานได้จริงทั้งแบบ direct runner และ pytest.
 - Local Semgrep baseline scan หลังแก้ผ่าน 0 findings; ต้อง rerun GitHub Security Gate หลัง push commit แก้ไข. หาก Docker build หรือ dependency audit ล้มอีก ให้แก้จาก log ของ runner ก่อนพิจารณา merge.
+
+
+## 26. Docker Base Image UID Compatibility (2026-08-16)
+
+- Security Gate รอบ corrective พบว่า Playwright base image มี UID 1000 อยู่แล้ว ทำให้ `useradd --uid 1000 appuser` ล้มด้วย exit code 4 แม้ dependency installation จะผ่าน.
+- แก้ Dockerfile ให้สร้าง dedicated system group/user `appuser` โดยไม่บังคับ UID และสร้าง upload directory ด้วย `install -d -o appuser -g appuser -m 700`; แก้ Compose ให้ใช้ `user: "appuser:appuser"` แทน numeric UID เพื่อให้ชื่อผู้ใช้และ ownership ตรงกันใน base image.
+- Security checker ยังผ่าน 14/14 checks; ต้อง build image จริงใน GitHub Actions หลัง push patch นี้. ห้ามสรุปว่า Docker production image ผ่านจาก local sandbox เพราะ sandbox ไม่มี Docker daemon.
