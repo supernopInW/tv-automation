@@ -39,6 +39,7 @@ jobs:
         run: node --check static/app.js
       - name: Run offline regression tests
         run: |
+          python test_security_headers.py
           python test_selector2_readiness.py
           python test_workflow26_hardening.py
           if [ -f test_clear_credentials.js ]; then node test_clear_credentials.js; fi
