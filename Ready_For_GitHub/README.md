@@ -114,6 +114,6 @@ Dockerfile
 
 ## ข้อกำหนดทางเทคนิคโดยย่อ
 
-- Python 3 + Flask, pandas, Playwright, (ทางเลือก) google-genai
+- Python 3 + Flask, pandas, Playwright และ local rules-based parser
 - พอร์ตเริ่มต้น `5000` (`PORT` เปลี่ยนได้)
 - บน Linux / HF Space มักบังคับ headless อัตโนมัติ

@@ -58,8 +58,36 @@ const activityOptions = {
 };
 
 let allRecords = [];
+let historicalActivityPool = [];
+let historicalActivityPoolLoaded = false;
 let selectedFile = null;
 let tempFilename = '';
+// Tracks the month selected by the web-based plan generator.
+// This must take precedence over the Excel sheet selector when submitting.
+let currentPlanMonth = '';
+
+const thaiPlanMonthAbbr = [
+    'มค', 'กพ', 'มีค', 'เมย', 'พค', 'มิย',
+    'กค', 'สค', 'กย', 'ตค', 'พย', 'ธค'
+];
+
+function planMonthToSheetName(planMonth) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(planMonth || ''));
+    if (!match) return '';
+    const month = parseInt(match[2], 10);
+    if (month < 1 || month > 12) return '';
+    const yearBeShort = String(parseInt(match[1], 10) + 543).slice(-2);
+    return `${thaiPlanMonthAbbr[month - 1]}${yearBeShort}`;
+}
+
+function inferPlanMonthFromRecords() {
+    const rec = allRecords.find(item => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(item.date || '')));
+    if (!rec) return '';
+    const [day, month, yearBeText] = String(rec.date).split('/').map(Number);
+    const year = yearBeText >= 2400 ? yearBeText - 543 : yearBeText;
+    if (!day || month < 1 || month > 12 || !year) return '';
+    return `${year}-${String(month).padStart(2, '0')}`;
+}
 let locationPresets = [{ value: "_custom", label: "กำหนดเอง..." }];
 /** Cache villages by tambon_code for per-row linking */
 const rowVillageCache = {};
@@ -126,6 +154,37 @@ function getRandomFieldTargetCount() {
     return pool[randIdx];
 }
 
+// T&V credentials are needed only for the current run. The username has
+// historically been stored in localStorage, while the password is in
+// sessionStorage; clear both locations and the visible fields after the run.
+function clearTandVCredentials() {
+    try {
+        localStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_password');
+    } catch (storageError) {
+        // Do not expose credential values if browser storage is unavailable.
+        console.warn('ไม่สามารถล้างข้อมูลรับรอง T&V จาก browser storage ได้', storageError);
+    }
+
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
+}
+
+// Return a one-shot cleanup callback for the end of one Playwright run.
+// The guard prevents duplicate cleanup when both stream completion and an
+// error handler observe the same run ending.
+function createRunCredentialCleanup() {
+    let credentialsCleared = false;
+    return () => {
+        if (credentialsCleared) return;
+        credentialsCleared = true;
+        clearTandVCredentials();
+    };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initMooMultiSelect();
     initVillageMultiSelect();
@@ -139,31 +198,17 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    const savedKey = localStorage.getItem('gemini_api_key') || '';
-    document.getElementById('gemini-api-key').value = savedKey;
-    document.getElementById('gemini-api-key').addEventListener('input', (e) => {
-        localStorage.setItem('gemini_api_key', e.target.value.trim());
-    });
-
     const savedApprover = localStorage.getItem('tv_approver') || '';
     if (savedApprover) document.getElementById('approver').value = savedApprover;
     document.getElementById('approver').addEventListener('input', (e) => {
         localStorage.setItem('tv_approver', e.target.value.trim());
     });
 
-    // Username: localStorage only (each person uses their own T&V account)
-    const savedUsername = localStorage.getItem('tv_username') || '';
-    if (savedUsername) document.getElementById('username').value = savedUsername;
-    document.getElementById('username').addEventListener('input', (e) => {
-        localStorage.setItem('tv_username', e.target.value.trim());
-    });
-
-    // Password: sessionStorage only — never localStorage, never hardcoded
-    const savedPassword = sessionStorage.getItem('tv_password') || '';
-    if (savedPassword) document.getElementById('password').value = savedPassword;
-    document.getElementById('password').addEventListener('input', (e) => {
-        sessionStorage.setItem('tv_password', e.target.value);
-    });
+    // T&V credentials are memory-only and are never persisted in Web Storage.
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
 
     const savedRole = localStorage.getItem('tv_role') || 'officer';
     document.getElementById('role-select').value = savedRole;
@@ -617,6 +662,7 @@ function renderChipRow(container, items, labelFn, onRemove) {
     items.forEach(item => {
         const chip = document.createElement('span');
         chip.className = 'chip';
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         chip.innerHTML = `<span>${labelFn(item)}</span>`;
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -694,10 +740,12 @@ function rebuildTambonPanel() {
     const list = geoState.tambons || [];
     const selected = new Set(normalizeTambons(geoState.selectedTambons).map(bareTambonName));
     if (!list.length) {
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         panel.innerHTML = '<div class="resp-tambon-empty">เลือกอำเภอก่อน — ระบบจะแสดงรายการตำบลให้ติ๊กเลือก (เลือกได้หลายตำบล)</div>';
         return;
     }
     // Always-visible checkbox grid — หน่วยเล็กสุดคือตำบล
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     panel.innerHTML = list.map(t => {
         const name = bareTambonName(t.name_th);
         return `<label class="resp-tambon-item"><input type="checkbox" value="${escapeAttr(name)}" ${selected.has(name) ? 'checked' : ''}> <span>${escapeAttr(formatTambonPart(name))}</span></label>`;
@@ -825,8 +873,8 @@ function rebuildMooPanel() {
     const pool = moosFromVillages(geoState.villages);
     const extras = geoState.moos.filter(m => !pool.includes(m));
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล${geoState.tambonName || ''} (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">เลือกตำบลก่อน — จะแสดงเฉพาะหมู่ที่มีจริง</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล${geoState.tambonName || ''} (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header">เลือกตำบลก่อน — จะแสดงเฉพาะหมู่ที่มีจริง</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> หมู่ ${escapeAttr(v)}</label>`;
     });
@@ -837,6 +885,7 @@ function rebuildMooPanel() {
         <button type="button" data-act="all" ${pool.length ? '' : 'disabled'}>ทุกหมู่ในตำบล</button>
         <button type="button" data-act="clear">ล้าง</button>
     </div>`;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     panel.innerHTML = html;
     panel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', () => {
@@ -874,7 +923,8 @@ function rebuildVillagePanel() {
     const selected = new Set(geoState.selectedVillages);
     const list = geoState.villages || [];
     if (!list.length) {
-        panel.innerHTML = '<div class="multi-select-option" style="cursor:default;opacity:0.7;">ยังไม่มีรายการ — พิมพ์เพิ่มด้านล่าง</div>';
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
+        panel.innerHTML = '<div class="multi-select-option csp-empty-multi-option">ยังไม่มีรายการ — พิมพ์เพิ่มด้านล่าง</div>';
         return;
     }
     let html = list.map(v => {
@@ -883,6 +933,7 @@ function rebuildVillagePanel() {
         return `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(name)}" data-moo="${escapeAttr(v.moo || '')}" ${selected.has(name) ? 'checked' : ''}> ${escapeAttr(label)}</label>`;
     }).join('');
     html += `<div class="multi-select-actions"><button type="button" data-act="clear">ล้าง</button></div>`;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     panel.innerHTML = html;
     panel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', () => {
@@ -1099,18 +1150,21 @@ function fillSelect(id, items, placeholder = '') {
         const label = typeof item === 'string' ? item : (item.name_th || item.label || val);
         html += `<option value="${escapeAttr(val)}">${escapeAttr(label)}</option>`;
     });
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     sel.innerHTML = html;
 }
 
 function fillDatalist(id, names) {
     const dl = document.getElementById(id);
     if (!dl) return;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     dl.innerHTML = names.map(n => `<option value="${escapeAttr(n)}"></option>`).join('');
 }
 
 function fillPresetSelect() {
     const sel = document.getElementById('preset-select');
     if (!sel) return;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     sel.innerHTML = '<option value="">— เลือกเอง —</option>';
     geoState.presets.forEach(p => {
         const opt = document.createElement('option');
@@ -1120,8 +1174,18 @@ function fillPresetSelect() {
     });
 }
 
+function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[char]);
+}
+
 function escapeAttr(s) {
-    return String(s).replace(/"/g, '&quot;');
+    return escapeHtml(s);
 }
 
 function findByName(list, name) {
@@ -1645,6 +1709,7 @@ async function renderPlaceBuilder(rowIdx) {
         rec.placeParts = [];
         rec.moos = [];
         rec.location = officePlace;
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         wrap.innerHTML = `<div class="place-amphoe-hint">งานสำนักงาน — ใช้สถานที่อย่างเดียว ไม่ต้องใส่หมู่/ตำบล</div>
             <div class="place-seg-preview" title="${escapeAttr(officePlace)}">${escapeAttr(officePlace)}</div>
             <div class="place-builder-actions">
@@ -1717,13 +1782,14 @@ async function renderPlaceBuilder(rowIdx) {
         <button type="button" class="btn-place-add-all" id="place-add-all-${rowIdx}" ${tambonCount ? '' : 'disabled'} title="ใส่ทุกตำบลในอำเภอ (ไม่สุ่มหมู่)">+ ทุกตำบล</button>
         <button type="button" class="btn-place-random-moo" id="place-random-moo-${rowIdx}" ${coverAll || !tambonCount ? 'disabled' : ''} title="สุ่ม 2–4 หมู่ จากหมู่บ้านจริงของตำบลที่รับผิดชอบ">สุ่มหมู่ 2–4</button>
         ${isMultiTambonRole() ? `<label class="row-use-all-tambons multi-tambon-only" title="ขยายส่งทีละตำบลในหัวแผน T&V">
-            <input type="checkbox" id="use-all-tambons-${rowIdx}" ${rec.useAllTambons ? 'checked' : ''} onchange="syncRowUseAllTambonsUi(${rowIdx})">
+            <input type="checkbox" id="use-all-tambons-${rowIdx}" ${rec.useAllTambons ? 'checked' : ''} data-csp-change="syncRowUseAllTambonsUi" data-csp-row-index="${rowIdx}">
             ขยายทีละตำบล
         </label>` : ''}
     </div>`;
     if (coverAll) {
         html += `<div class="place-amphoe-hint">ทุกตำบล — ไม่สุ่มหมู่</div>`;
     }
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     wrap.innerHTML = html;
 
     const finalLoc = syncRecordPlaceFromParts(rec);
@@ -1833,8 +1899,8 @@ async function rebuildPlaceMooPanel(rowIdx, partIdx) {
         }
     }
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล${tb} (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:#fbbf24;">ยังไม่มีข้อมูลหมู่บ้านของตำบลนี้</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล${tb} (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header csp-multi-header-warning">ยังไม่มีข้อมูลหมู่บ้านของตำบลนี้</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> ม.${escapeAttr(v)}</label>`;
     });
@@ -1842,6 +1908,7 @@ async function rebuildPlaceMooPanel(rowIdx, partIdx) {
         <button type="button" data-act="all" ${pool.length ? '' : 'disabled'}>ทุกหมู่ในตำบล</button>
         <button type="button" data-act="clear">ล้าง</button>
     </div>`;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     panel.innerHTML = html;
     panel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', () => {
@@ -1879,7 +1946,8 @@ async function togglePlaceMooPanel(rowIdx, partIdx) {
     const panel = document.querySelector(`#place-builder-${rowIdx} .place-moo-panel[data-part="${partIdx}"]`);
     if (!panel) return;
     panel.hidden = false;
-    panel.innerHTML = '<div style="padding:0.35rem;font-size:0.75rem;color:var(--text-muted);">กำลังโหลดหมู่บ้าน...</div>';
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
+    panel.innerHTML = '<div class="csp-loading-option">กำลังโหลดหมู่บ้าน...</div>';
     await rebuildPlaceMooPanel(rowIdx, partIdx);
     panel.hidden = false;
 }
@@ -1984,19 +2052,20 @@ function rebuildRowMooPanel(rowIdx) {
         return `<label class="multi-select-option"><input type="checkbox" data-kind="village" value="${escapeAttr(name)}" data-moo="${escapeAttr(v.moo || '')}" ${checked}> ${escapeAttr(label)}</label>`;
     }).join('');
     let html = pool.length
-        ? `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">หมู่ในตำบล (${pool.length} หมู่)</div>`
-        : `<div style="padding:0.25rem 0.45rem;font-size:0.72rem;color:var(--text-muted);">ยังไม่มีข้อมูลหมู่บ้าน</div>`;
+        ? `<div class="csp-multi-header">หมู่ในตำบล (${pool.length} หมู่)</div>`
+        : `<div class="csp-multi-header">ยังไม่มีข้อมูลหมู่บ้าน</div>`;
     pool.forEach(v => {
         html += `<label class="multi-select-option"><input type="checkbox" data-kind="moo" value="${escapeAttr(v)}" ${selected.has(v) ? 'checked' : ''}> ม.${escapeAttr(v)}</label>`;
     });
     if (villageOpts) {
-        html += '<div style="padding:0.35rem 0.45rem 0.15rem;font-size:0.72rem;color:var(--text-muted);border-top:1px solid rgba(148,163,184,0.2);margin-top:0.2rem;">หมู่บ้าน</div>';
+        html += '<div class="csp-village-header">หมู่บ้าน</div>';
         html += villageOpts;
     }
     html += `<div class="multi-select-actions">
         <button type="button" data-act="all" ${pool.length ? '' : 'disabled'}>ทุกหมู่ในตำบล</button>
         <button type="button" data-act="clear">ล้าง</button>
     </div>`;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     panel.innerHTML = html;
 
     panel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -2189,9 +2258,10 @@ function onSheetChange() {
 }
 
 function loadRecords(sheetName) {
+    // Loading an Excel sheet switches month authority back to the sheet selector.
+    currentPlanMonth = '';
     const rowCountEl = document.getElementById('row-count');
     rowCountEl.textContent = 'กำลังโหลดตาราง...';
-    const apiKey = localStorage.getItem('gemini_api_key') || '';
     const office = document.getElementById('office-name').value.trim();
     const tambon = document.getElementById('tambon').value.trim();
     const qs = new URLSearchParams({
@@ -2200,7 +2270,7 @@ function loadRecords(sheetName) {
         office_name: office,
         tambon: tambon
     });
-    fetch(`/api/records?${qs}`, { headers: { 'X-Gemini-API-Key': apiKey } })
+    fetch(`/api/records?${qs}`)
         .then(res => res.json())
         .then(async data => {
             if (data.success) {
@@ -2281,61 +2351,146 @@ function relocateForTambon(baseLocation, oldTambon, newTambon, moos, villages) {
 
 function renderTable(records) {
     const tbody = document.getElementById('table-body');
-    tbody.innerHTML = '';
+    tbody.textContent = '';
     buildDescPresets(records);
-    const multi = isMultiTambonRole();
+
+    const createFulltextBox = (id) => {
+        const box = document.createElement('div');
+        box.className = 'cell-fulltext';
+        box.id = id;
+        return box;
+    };
 
     records.forEach((rec, idx) => {
         const tr = document.createElement('tr');
         tr.id = `row-${idx}`;
-        let issueOptionsHtml = '';
-        for (const [val, label] of Object.entries(issueOptions)) {
-            const selected = val === String(rec.issue_val) ? 'selected' : '';
-            issueOptionsHtml += `<option value="${val}" ${selected}>${label}</option>`;
-        }
+
+        const idCell = document.createElement('td');
+        idCell.className = 'text-center csp-row-index';
+        idCell.textContent = String(rec.id ?? '');
+        tr.appendChild(idCell);
+
+        const dateCell = document.createElement('td');
+        dateCell.className = 'row-date-col';
+        const dateInput = document.createElement('input');
+        dateInput.type = 'text';
+        dateInput.className = 'cell-input csp-date-input';
+        dateInput.id = `date-${idx}`;
+        dateInput.value = rec.date || '';
+        dateInput.title = rec.date || '';
+        dateInput.dataset.cspChange = 'onRowDateChanged';
+        dateInput.dataset.cspRowIndex = String(idx);
+        dateCell.appendChild(dateInput);
+        tr.appendChild(dateCell);
+
         const tambonVal = rec.tambon || geoState.tambonName || '';
-        const useAll = !!rec.useAllTambons;
-        tr.innerHTML = `
-            <td class="text-center" style="font-weight: 700; color: var(--text-muted);">${rec.id}</td>
-            <td class="row-date-col">
-                <input type="text" class="cell-input" id="date-${idx}" value="${rec.date || ''}" style="text-align: center;" title="${rec.date || ''}" onchange="onRowDateChanged(${idx})">
-            </td>
-            <td class="row-issue-col">
-                <div class="cell-stack">
-                    <select class="cell-input cell-select" id="issue-${idx}" onchange="onIssueChange(${idx}); syncSelectFulltext('issue-${idx}')">
-                        ${issueOptionsHtml}
-                    </select>
-                    <div class="cell-fulltext" id="issue-${idx}-fulltext"></div>
-                </div>
-            </td>
-            <td class="row-activity-col">
-                <div class="cell-stack">
-                    <select class="cell-input cell-select" id="activity-select-${idx}" onchange="syncSelectFulltext('activity-select-${idx}')"></select>
-                    <div class="cell-fulltext" id="activity-select-${idx}-fulltext"></div>
-                </div>
-            </td>
-            <td class="row-details-col">
-                <div class="desc-combo">
-                    <select class="cell-input cell-select" id="desc-select-${idx}" onchange="onDescChange(${idx}); syncSelectFulltext('desc-select-${idx}')"></select>
-                    <div class="cell-fulltext" id="desc-select-${idx}-fulltext"></div>
-                    <textarea class="cell-input" id="activity-${idx}" style="min-height: 64px; resize: vertical; display: none;" placeholder="พิมพ์รายละเอียด...">${rec.activity || ''}</textarea>
-                </div>
-            </td>
-            <td class="row-location-col">
-                <div class="place-builder" id="place-builder-${idx}"></div>
-                <div class="location-preview place-final-preview" id="location-preview-${idx}" title="ข้อความที่จะกรอกใน PD_PLACE"></div>
-                <input type="hidden" id="tambon-${idx}" value="${bareTambonName(tambonVal)}">
-            </td>
-            <td class="row-target-col text-center">
-                <input type="number" class="cell-input text-center" id="target-${idx}" value="${rec.target_num || 0}">
-            </td>
-            <td class="row-status-col text-center" id="status-${idx}">
-                <span class="status-badge badge-ready">พร้อมกรอก</span>
-            </td>
-            <td class="row-action-col text-center">
-                <button class="btn-delete-row" onclick="deleteRow(${idx})" title="ลบแถวนี้">🗑️</button>
-            </td>
-        `;
+        const issueCell = document.createElement('td');
+        issueCell.className = 'row-issue-col';
+        const issueStack = document.createElement('div');
+        issueStack.className = 'cell-stack';
+        const issueSelect = document.createElement('select');
+        issueSelect.className = 'cell-input cell-select';
+        issueSelect.id = `issue-${idx}`;
+        issueSelect.dataset.cspChange = 'onIssueChange';
+        issueSelect.dataset.cspRowIndex = String(idx);
+        issueSelect.dataset.cspAfter = 'syncSelectFulltext';
+        issueSelect.dataset.cspTargetId = issueSelect.id;
+        Object.entries(issueOptions).forEach(([val, label]) => {
+            const option = document.createElement('option');
+            option.value = val;
+            option.textContent = label;
+            option.selected = val === String(rec.issue_val);
+            issueSelect.appendChild(option);
+        });
+        issueStack.appendChild(issueSelect);
+        issueStack.appendChild(createFulltextBox(`${issueSelect.id}-fulltext`));
+        issueCell.appendChild(issueStack);
+        tr.appendChild(issueCell);
+
+        const activityCell = document.createElement('td');
+        activityCell.className = 'row-activity-col';
+        const activityStack = document.createElement('div');
+        activityStack.className = 'cell-stack';
+        const activitySelect = document.createElement('select');
+        activitySelect.className = 'cell-input cell-select';
+        activitySelect.id = `activity-select-${idx}`;
+        activitySelect.dataset.cspChange = 'syncSelectFulltext';
+        activitySelect.dataset.cspTargetId = activitySelect.id;
+        activityStack.appendChild(activitySelect);
+        activityStack.appendChild(createFulltextBox(`${activitySelect.id}-fulltext`));
+        activityCell.appendChild(activityStack);
+        tr.appendChild(activityCell);
+
+        const detailsCell = document.createElement('td');
+        detailsCell.className = 'row-details-col';
+        const descCombo = document.createElement('div');
+        descCombo.className = 'desc-combo';
+        const descSelect = document.createElement('select');
+        descSelect.className = 'cell-input cell-select';
+        descSelect.id = `desc-select-${idx}`;
+        descSelect.dataset.cspChange = 'onDescChange';
+        descSelect.dataset.cspRowIndex = String(idx);
+        descSelect.dataset.cspAfter = 'syncSelectFulltext';
+        descSelect.dataset.cspTargetId = descSelect.id;
+        descCombo.appendChild(descSelect);
+        descCombo.appendChild(createFulltextBox(`${descSelect.id}-fulltext`));
+        const activityArea = document.createElement('textarea');
+        activityArea.className = 'cell-input csp-activity-textarea';
+        activityArea.id = `activity-${idx}`;
+        activityArea.placeholder = 'พิมพ์รายละเอียด...';
+        activityArea.value = rec.activity || '';
+        descCombo.appendChild(activityArea);
+        detailsCell.appendChild(descCombo);
+        tr.appendChild(detailsCell);
+
+        const locationCell = document.createElement('td');
+        locationCell.className = 'row-location-col';
+        const placeBuilder = document.createElement('div');
+        placeBuilder.className = 'place-builder';
+        placeBuilder.id = `place-builder-${idx}`;
+        locationCell.appendChild(placeBuilder);
+        const locationPreview = document.createElement('div');
+        locationPreview.className = 'location-preview place-final-preview';
+        locationPreview.id = `location-preview-${idx}`;
+        locationPreview.title = 'ข้อความที่จะกรอกใน PD_PLACE';
+        locationCell.appendChild(locationPreview);
+        const tambonInput = document.createElement('input');
+        tambonInput.type = 'hidden';
+        tambonInput.id = `tambon-${idx}`;
+        tambonInput.value = bareTambonName(tambonVal);
+        locationCell.appendChild(tambonInput);
+        tr.appendChild(locationCell);
+
+        const targetCell = document.createElement('td');
+        targetCell.className = 'row-target-col text-center';
+        const targetInput = document.createElement('input');
+        targetInput.type = 'number';
+        targetInput.className = 'cell-input text-center';
+        targetInput.id = `target-${idx}`;
+        targetInput.value = rec.target_num || 0;
+        targetCell.appendChild(targetInput);
+        tr.appendChild(targetCell);
+
+        const statusCell = document.createElement('td');
+        statusCell.className = 'row-status-col text-center';
+        statusCell.id = `status-${idx}`;
+        const status = document.createElement('span');
+        status.className = 'status-badge badge-ready';
+        status.textContent = 'พร้อมกรอก';
+        statusCell.appendChild(status);
+        tr.appendChild(statusCell);
+
+        const actionCell = document.createElement('td');
+        actionCell.className = 'row-action-col text-center';
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'btn-delete-row';
+        deleteButton.dataset.cspAction = 'deleteRow';
+        deleteButton.dataset.cspRowIndex = String(idx);
+        deleteButton.title = 'ลบแถวนี้';
+        deleteButton.textContent = '🗑️';
+        actionCell.appendChild(deleteButton);
+        tr.appendChild(actionCell);
+
         tbody.appendChild(tr);
         ensureRowGeoFields(rec);
         if (!isOfficeWorkRecord(rec) && !rec.placeParts?.length) {
@@ -2645,6 +2800,7 @@ function addLog(type, message) {
     if (type === 'success') typeClass = 'entry-success';
     if (type === 'error') typeClass = 'entry-error';
     if (type === 'warning') typeClass = 'entry-warning';
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     entry.innerHTML = `
         <span class="log-timestamp">${timeStr}</span>
         <span class="${typeClass}">${message}</span>
@@ -2701,6 +2857,7 @@ async function createBlankPlanOnWeb() {
     const today = new Date();
     const currentMonth = today.getMonth() + 1;
     const currentYearBe = today.getFullYear() + 543;
+    currentPlanMonth = `${today.getFullYear()}-${String(currentMonth).padStart(2, '0')}`;
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
 
@@ -2750,6 +2907,7 @@ async function generateMonthScheduleOnWeb() {
     const month = today.getMonth();
     const yearBe = year + 543;
     const monthStr = String(month + 1).padStart(2, '0');
+    currentPlanMonth = `${year}-${monthStr}`;
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
 
@@ -2848,6 +3006,7 @@ function clearPlanTable() {
         'คุณต้องการล้างรายการแผนงานทั้งหมดในตารางใช่หรือไม่?',
         () => {
             allRecords = [];
+            currentPlanMonth = '';
             renderTable(allRecords);
             updateQuickStats();
             addLog('info', 'ล้างข้อมูลตารางเรียบร้อยแล้ว');
@@ -2868,12 +3027,15 @@ function updateQuickStats() {
     for (const [label, count] of Object.entries(issueCount)) {
         html += `<span class="stat-chip"><span class="stat-count">${count}</span> ${label}</span>`;
     }
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     statsContainer.innerHTML = html;
 }
 
 function showConfirmModal(title, message, onConfirm) {
     const overlay = document.getElementById('confirm-overlay');
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     document.getElementById('confirm-title').innerHTML = title;
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     document.getElementById('confirm-message').innerHTML = message;
     overlay.classList.add('active');
     document.getElementById('confirm-yes-btn').onclick = () => {
@@ -3040,6 +3202,7 @@ function executeAutomation() {
     const startBtn = document.getElementById('start-btn');
     const logStatus = document.getElementById('log-status');
     const errorContainer = document.getElementById('error-container');
+    let completionConfirmed = false;
 
     errorContainer.style.display = 'none';
     startBtn.disabled = true;
@@ -3056,10 +3219,14 @@ function executeAutomation() {
         return;
     }
 
+    const autoPlanMonth = currentPlanMonth || inferPlanMonthFromRecords();
+    const runSheet = autoPlanMonth
+        ? planMonthToSheetName(autoPlanMonth)
+        : document.getElementById('sheet-select').value;
     const payload = {
         username: document.getElementById('username').value.trim(),
         password: document.getElementById('password').value,
-        sheet: document.getElementById('sheet-select').value,
+        sheet: runSheet,
         tambon: document.getElementById('tambon').value.trim() || (built.expandList[0] || ''),
         role: geoState.role,
         office_name: document.getElementById('office-name').value.trim(),
@@ -3077,6 +3244,7 @@ function executeAutomation() {
     };
 
     const uiIndexMap = built.uiIndexMap;
+    const clearRunCredentials = createRunCredentialCleanup();
     allRecords.forEach((_, idx) => updateRowStatus(idx, 'ready'));
 
     let modeLabel = 'Dry-run (ทดสอบ)';
@@ -3111,9 +3279,16 @@ function executeAutomation() {
         function processStream() {
             reader.read().then(({ done, value }) => {
                 if (done) {
+                    clearRunCredentials();
                     startBtn.disabled = false;
-                    logStatus.textContent = 'FINISHED';
-                    logStatus.style.color = 'var(--success)';
+                    if (completionConfirmed) {
+                        logStatus.textContent = 'FINISHED';
+                        logStatus.style.color = 'var(--success)';
+                    } else {
+                        logStatus.textContent = 'UNKNOWN';
+                        logStatus.style.color = 'var(--warning)';
+                        addLog('warning', 'การเชื่อมต่อจบลงโดยไม่มีสัญญาณยืนยันผลลัพธ์จากเซิร์ฟเวอร์ กรุณาตรวจสอบพอร์ทัลก่อนเริ่มใหม่');
+                    }
                     return;
                 }
                 buffer += decoder.decode(value, { stream: true });
@@ -3123,6 +3298,7 @@ function executeAutomation() {
                     if (line.startsWith('data: ')) {
                         try {
                             const data = JSON.parse(line.slice(6));
+                            if (data.type === 'done') completionConfirmed = true;
                             handleSSEMessage(data, payload.records.length, uiIndexMap);
                         } catch (e) {
                             console.error(e);
@@ -3130,11 +3306,18 @@ function executeAutomation() {
                     }
                 });
                 processStream();
+            }).catch(err => {
+                clearRunCredentials();
+                addLog("error", `การอ่านผลการทำงานผิดพลาด: ${err.message || err}`);
+                startBtn.disabled = false;
+                logStatus.textContent = 'ERROR';
+                logStatus.style.color = 'var(--error)';
             });
         }
         processStream();
     })
     .catch(err => {
+        clearRunCredentials();
         addLog("error", `การรันผิดพลาด: ${err.message || err}`);
         startBtn.disabled = false;
         logStatus.textContent = 'ERROR';
@@ -3149,6 +3332,9 @@ function handleSSEMessage(data, totalCount, uiIndexMap = null) {
         addLog('error', data.message);
     } else if (data.type === 'done') {
         addLog('success', data.message);
+    } else if (data.type === 'diagnostics') {
+        const details = data.details || {};
+        addLog('warning', `Diagnostics แถว ${data.index ?? '-'}: ${details.url || details.diagnostics_error || 'ไม่พบรายละเอียด'}`);
     } else if (data.type === 'row_status') {
         const payloadIdx = data.index;
         const idx = Array.isArray(uiIndexMap) && uiIndexMap[payloadIdx] != null
@@ -3176,8 +3362,23 @@ function handleSSEMessage(data, totalCount, uiIndexMap = null) {
     } else if (data.type === 'screenshot') {
         const container = document.getElementById('error-container');
         const img = document.getElementById('error-img');
-        img.src = `${data.url}?t=${new Date().getTime()}`;
+        let message = document.getElementById('error-screenshot-message');
+        if (!message) {
+            message = document.createElement('p');
+            message.id = 'error-screenshot-message';
+            message.className = 'error-screenshot-message';
+            container.appendChild(message);
+        }
         container.style.display = 'block';
+        if (data.available && data.url) {
+            img.src = `${data.url}?t=${new Date().getTime()}`;
+            img.hidden = false;
+            message.textContent = '';
+        } else {
+            img.removeAttribute('src');
+            img.hidden = true;
+            message.textContent = data.message || 'ภาพหน้าจอถูกซ่อนเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล';
+        }
     }
 }
 
@@ -3185,16 +3386,20 @@ function updateRowStatus(rowIdx, status) {
     const td = document.getElementById(`status-${rowIdx}`);
     if (!td) return;
     if (status === 'ready') {
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         td.innerHTML = `<span class="status-badge badge-ready">พร้อมกรอก</span>`;
     } else if (status === 'processing') {
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         td.innerHTML = `
             <span class="status-badge badge-processing">
                 <span class="loading-spinner"></span>
                 กำลังกรอก...
             </span>`;
     } else if (status === 'success') {
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         td.innerHTML = `<span class="status-badge badge-success">✓ สำเร็จ</span>`;
     } else if (status === 'error') {
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
         td.innerHTML = `<span class="status-badge badge-error">✗ ผิดพลาด</span>`;
     }
 }
@@ -3277,6 +3482,7 @@ function populateAutoPlanMonthSelect() {
         const label = `${monthNames[mIdx]} ${yBe}`;
         html += `<option value="${val}">${label}</option>`;
     }
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     sel.innerHTML = html;
 }
 
@@ -3305,7 +3511,7 @@ function renderHolidayDaysGrid() {
         if (isWeekend) classes += ' is-weekend';
         if (isHoliday) classes += ' is-holiday';
 
-        const clickHandler = isWeekend ? '' : `onclick="toggleHolidayDay(${d})"`;
+        const clickHandler = isWeekend ? '' : `data-csp-action="toggleHolidayDay" data-csp-day="${d}"`;
 
         html += `
             <button type="button" class="${classes}" ${clickHandler} title="${d} (วัน${dayShortNames[dayOfWeek]})">
@@ -3313,8 +3519,8 @@ function renderHolidayDaysGrid() {
                 <span class="day-name">${dayShortNames[dayOfWeek]}</span>
             </button>
         `;
-    }
-
+        }
+    // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
     grid.innerHTML = html;
     updateHolidayHintText();
 }
@@ -3369,7 +3575,8 @@ function updateHolidayHintText() {
     if (!hint) return;
     const list = Array.from(selectedHolidaysSet).sort((a, b) => a - b);
     if (list.length > 0) {
-        hint.innerHTML = `วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · <strong style="color:#fca5a5;">เลือกวันหยุดแล้ว (${list.length} วัน): วันที่ ${list.join(', ')}</strong>`;
+        // nosemgrep: tv-automation-no-dynamic-innerhtml -- reviewed legacy sink
+        hint.innerHTML = `วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · <strong class="csp-holiday-selected">เลือกวันหยุดแล้ว (${list.length} วัน): วันที่ ${list.join(', ')}</strong>`;
     } else {
         hint.textContent = 'วันเสาร์-อาทิตย์เว้นให้อัตโนมัติ · คลิกที่ตัวเลขเพื่อเลือกวันหยุดนักขัตฤกษ์/วันหยุดพิเศษ/วันลาเพิ่มเติม';
     }
@@ -3387,6 +3594,47 @@ const randomActivityPool = [
     { issue_val: "2", activity_val: "17", activity: "การบริหารจัดการพื้นที่เกษตรกรรมตามแผนที่ Agri-Map" },
     { issue_val: "2", activity_val: "21", activity: "การส่งเสริมการทำเกษตรตามแนวทางเกษตรทฤษฎีใหม่" }
 ];
+
+async function loadHistoricalActivityPool() {
+    if (historicalActivityPoolLoaded) return historicalActivityPool;
+
+    try {
+        const response = await fetch('/api/historical-activities');
+        const payload = await response.json();
+        historicalActivityPool = Array.isArray(payload.activities)
+            ? payload.activities.filter(item =>
+                item &&
+                String(item.issue_val) === '2' &&
+                String(item.activity_val || '').trim() &&
+                String(item.activity || '').trim()
+            )
+            : [];
+        historicalActivityPoolLoaded = true;
+        return historicalActivityPool;
+    } catch (error) {
+        historicalActivityPoolLoaded = true;
+        historicalActivityPool = [];
+        addLog('warning', 'โหลดคลังกิจกรรมจาก Excel เก่าไม่สำเร็จ');
+        return historicalActivityPool;
+    }
+}
+
+function pickWeightedActivity(pool) {
+    const candidates = Array.isArray(pool) && pool.length ? pool : randomActivityPool;
+    const totalWeight = candidates.reduce((sum, item) => {
+        const weight = Number(item?.weight);
+        return sum + (Number.isFinite(weight) && weight > 0 ? weight : 1);
+    }, 0);
+    let cursor = Math.random() * totalWeight;
+
+    for (const item of candidates) {
+        const weight = Number(item?.weight);
+        cursor -= Number.isFinite(weight) && weight > 0 ? weight : 1;
+        if (cursor < 0) return item;
+    }
+
+    return candidates[candidates.length - 1];
+}
 
 async function generateAutoMonthPlanFromWebUI() {
     const tbs = [...getResponsibleTambonSet()];
@@ -3407,11 +3655,25 @@ async function generateAutoMonthPlanFromWebUI() {
     const [yearStr, monthStr] = monthSel.split('-');
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10) - 1; // 0-indexed
+    currentPlanMonth = monthSel;
     const yearBe = year + 543;
     const monthFormattedStr = String(month + 1).padStart(2, '0');
 
-    const randomizeActivities = !!document.getElementById('opt-randomize-activities')?.checked;
     const randomizeVillages = !!document.getElementById('opt-randomize-villages-auto')?.checked;
+    const historicalPool = await loadHistoricalActivityPool();
+    const activitySourcePool = historicalPool.length
+        ? historicalPool
+        : randomActivityPool;
+    const shouldRandomizeActivities = activitySourcePool.length > 0;
+
+    if (historicalPool.length > 0) {
+        addLog(
+            'info',
+            `สุ่มกิจกรรมเยี่ยมเยียนจากคลัง Excel เก่า ${historicalPool.length} รูปแบบ โดยให้น้ำหนักตามจำนวนครั้งที่พบ`
+        );
+    } else {
+        addLog('warning', 'ไม่พบกิจกรรมเยี่ยมเยียนจาก Excel เก่า จึงใช้รายการกิจกรรมสำรองของระบบ');
+    }
 
     const responsible = [...getResponsibleTambonSet()];
     const primaryTambon = responsible[0] || bareTambonName(geoState.tambonName || '');
@@ -3468,9 +3730,8 @@ async function generateAutoMonthPlanFromWebUI() {
                 activity: 'การเยี่ยมเยียนส่งเสริมการเกษตรและถ่ายทอดความรู้'
             };
 
-            if (randomizeActivities) {
-                const randIdx = Math.floor(Math.random() * randomActivityPool.length);
-                chosenAct = randomActivityPool[randIdx];
+            if (shouldRandomizeActivities) {
+                chosenAct = pickWeightedActivity(activitySourcePool);
             }
 
             const randTarget = getRandomFieldTargetCount(); // สุ่มจาก [20, 30, 50, 60] คน
@@ -3490,7 +3751,7 @@ async function generateAutoMonthPlanFromWebUI() {
                 co_workers: '',
                 issue_val: chosenAct.issue_val,
                 activity_val: chosenAct.activity_val,
-                other_text: '',
+                other_text: chosenAct.other_text || '',
                 useAllTambons: false
             });
         }

@@ -2011,3 +2011,285 @@ body:not(.role-multi-tambon) .multi-tambon-only {
     color: #f472b6;
     text-decoration: underline;
 }
+
+
+/* CSP-safe replacements for former inline styles in templates/index.html. */
+.csp-logo-mark {
+    vertical-align: middle;
+}
+
+.csp-section-heading {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--text-title);
+}
+
+.csp-heading-setup {
+    margin-bottom: 0.5rem;
+}
+
+.csp-plan-heading {
+    margin-bottom: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.csp-table-heading {
+    margin-bottom: 0;
+}
+
+.csp-tambon-wrap {
+    margin-top: 1rem;
+}
+
+.csp-plan-mode-tabs {
+    display: flex;
+    gap: 0.5rem;
+    background: rgba(15, 23, 42, 0.6);
+    padding: 0.35rem;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 1.25rem;
+}
+
+.csp-plan-tab {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    font-weight: 700;
+    border: none;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.csp-file-input-hidden {
+    display: none;
+}
+
+.csp-file-name {
+    display: none;
+    color: var(--success);
+}
+
+.csp-upload-options {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.csp-upload-btn {
+    padding: 0.8rem 2rem;
+}
+
+.csp-auto-panel {
+    display: none;
+    background: rgba(15, 23, 42, 0.4);
+    padding: 1.25rem;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.csp-auto-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.csp-grid-full {
+    grid-column: 1 / -1;
+}
+
+.csp-holiday-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.csp-holiday-label {
+    margin: 0;
+    font-weight: 700;
+    color: var(--text-title);
+}
+
+.csp-flex-gap-half-wrap {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.btn-holiday-thai {
+    font-size: 0.78rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #f87171;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.btn-holiday-clear {
+    font-size: 0.78rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.csp-hint-top {
+    margin-top: 0.5rem;
+}
+
+.csp-hint-top-lg {
+    margin-top: 1rem;
+}
+
+.csp-flex-gap-wide {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.25rem;
+}
+
+.csp-actions-end {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.csp-auto-generate {
+    padding: 0.8rem 2.2rem;
+    background: linear-gradient(135deg, #10b981, #059669);
+}
+
+.csp-inline-controls {
+    flex-direction: row;
+    align-items: center;
+    gap: 1rem;
+}
+
+.csp-mode-label {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-right: 0.25rem;
+}
+
+.csp-table-section {
+    padding: 1.5rem;
+}
+
+.csp-records-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.25rem;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.csp-row-count {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.csp-col-index {
+    width: 50px;
+}
+
+.csp-table-actions {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 1.25rem 0 0.5rem 0;
+}
+
+.csp-action-schedule {
+    background: rgba(139, 92, 246, 0.18);
+    border-color: var(--primary);
+}
+
+.csp-action-export {
+    background: rgba(16, 185, 129, 0.18);
+    border-color: var(--success);
+}
+
+.csp-action-clear {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: var(--error);
+}
+
+.csp-log-status {
+    color: var(--text-muted);
+}
+
+.footer-dev-address {
+    font-style: normal;
+}
+
+.footer-dev-link {
+    color: inherit;
+    text-decoration: none;
+}
+
+
+.csp-multi-header {
+    padding: 0.25rem 0.45rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.csp-multi-header-warning {
+    color: #fbbf24;
+}
+
+.csp-empty-multi-option {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.csp-loading-option {
+    padding: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.csp-village-header {
+    padding: 0.35rem 0.45rem 0.15rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+    margin-top: 0.2rem;
+}
+
+.csp-row-index {
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.csp-date-input {
+    text-align: center;
+}
+
+.csp-activity-textarea {
+    min-height: 64px;
+    resize: vertical;
+    display: none;
+}
+
+.csp-holiday-selected {
+    color: #fca5a5;
+}

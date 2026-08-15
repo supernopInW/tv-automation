@@ -12,32 +12,52 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session
+from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session, g
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import json
 import os
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
-from google import genai
+
 import geo_data
+
+APP_SESSION_SECRET = os.environ.get('APP_SESSION_SECRET', '').strip()
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
-app.config['SECRET_KEY'] = os.environ.get('APP_SESSION_SECRET', '') or secrets.token_urlsafe(32)
+app.config['SECRET_KEY'] = APP_SESSION_SECRET or secrets.token_urlsafe(32)
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_BYTES', str(10 * 1024 * 1024)))
 
-APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '0').strip().lower() in {'1', 'true', 'yes'}
+
+APP_AUTH_REQUIRED = os.environ.get('APP_AUTH_REQUIRED', '1').strip().lower() in {'1', 'true', 'yes'}
 APP_AUTH_USERNAME = os.environ.get('APP_AUTH_USERNAME', '').strip()
 APP_AUTH_PASSWORD_HASH = os.environ.get('APP_AUTH_PASSWORD_HASH', '').strip()
-RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://')
-if APP_AUTH_REQUIRED and not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH):
+APP_AUTH_ROLE = os.environ.get('APP_AUTH_ROLE', 'officer').strip()
+APP_AUTH_OFFICE_NAME = os.environ.get('APP_AUTH_OFFICE_NAME', '').strip()
+APP_AUTH_ALLOWED_TAMBONS = frozenset(
+    item.strip() for item in os.environ.get('APP_AUTH_ALLOWED_TAMBONS', '').split(',') if item.strip()
+)
+APP_AUTH_ALLOWED_APPROVERS = frozenset(
+    item.strip() for item in os.environ.get('APP_AUTH_ALLOWED_APPROVERS', '').split(',') if item.strip()
+)
+APP_AUTH_CAN_SUBMIT = os.environ.get('APP_AUTH_CAN_SUBMIT', '0').strip().lower() in {'1', 'true', 'yes'}
+APP_ENV = os.environ.get('APP_ENV', 'development').strip().lower()
+RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://').strip()
+if APP_ENV in {'production', 'prod'} and RATE_LIMIT_STORAGE_URI.startswith('memory://'):
+    raise RuntimeError('RATELIMIT_STORAGE_URI must be a shared Redis URI in production')
+if APP_ENV in {'production', 'prod'} and APP_AUTH_REQUIRED:
+    if not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET):
+        raise RuntimeError('Production application authentication secrets are not configured')
+    if not (APP_AUTH_ROLE and APP_AUTH_OFFICE_NAME and APP_AUTH_ALLOWED_TAMBONS and APP_AUTH_ALLOWED_APPROVERS):
+        raise RuntimeError('Production authorization profile is not configured')
+if APP_AUTH_REQUIRED and not (APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET):
     # Fail closed for protected requests; never use a source-code default.
-    print('APP_AUTH_REQUIRED=1 but APP_AUTH_USERNAME/PASSWORD_HASH is not configured')
+    print('APP_AUTH_REQUIRED=1 but authentication secrets are not configured')
 if RATE_LIMIT_STORAGE_URI == 'memory://':
     print('WARNING: RATELIMIT_STORAGE_URI=memory:// is for development only')
 
@@ -82,11 +102,98 @@ def _csrf_valid():
 
 
 def _auth_configured():
-    return bool(APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH)
+    return bool(APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH and APP_SESSION_SECRET)
 
 
 def _app_authenticated():
     return bool(session.get('app_user'))
+
+
+def _normalize_tambon_name(value):
+    return str(value or '').replace('ตำบล', '').replace('แขวง', '').strip()
+
+
+def _server_auth_profile():
+    return {
+        'username': APP_AUTH_USERNAME,
+        'role': APP_AUTH_ROLE or 'officer',
+        'office_name': APP_AUTH_OFFICE_NAME,
+        'allowed_tambons': APP_AUTH_ALLOWED_TAMBONS,
+        'allowed_approvers': APP_AUTH_ALLOWED_APPROVERS,
+        'can_submit': APP_AUTH_CAN_SUBMIT,
+    }
+
+
+def _auth_profile_configured():
+    return bool(
+        APP_AUTH_ROLE
+        and APP_AUTH_OFFICE_NAME
+        and APP_AUTH_ALLOWED_TAMBONS
+        and APP_AUTH_ALLOWED_APPROVERS
+    )
+
+
+def _validate_run_authorization(data):
+    """Derive automation scope from the server profile when app auth is enabled."""
+    requested_mode = str(data.get('mode', 'dry_run') or 'dry_run').strip()
+    if 'dry_run' in data and requested_mode == 'dry_run' and data.get('dry_run') is False:
+        requested_mode = 'submit'
+    if requested_mode not in {'dry_run', 'draft', 'submit'}:
+        return None, ({'success': False, 'error': 'โหมดการทำงานไม่ถูกต้อง'}, 400)
+
+    if not APP_AUTH_REQUIRED:
+        return {
+            'tambon': data.get('tambon', ''),
+            'role': data.get('role', 'officer'),
+            'office_name': data.get('office_name', ''),
+            'approver': data.get('approver', ''),
+            'mode': requested_mode,
+        }, None
+
+    if not _auth_profile_configured():
+        return None, ({'success': False, 'error': 'ยังไม่ได้ตั้งค่า server-side authorization profile'}, 503)
+
+    profile = _server_auth_profile()
+    requested_tambons = list(data.get('selected_tambons') or [])
+    if not requested_tambons and data.get('tambon'):
+        requested_tambons = [data.get('tambon')]
+    normalized_requested = {_normalize_tambon_name(item) for item in requested_tambons if str(item).strip()}
+    unauthorized_tambons = normalized_requested - {_normalize_tambon_name(item) for item in profile['allowed_tambons']}
+    if not normalized_requested or unauthorized_tambons:
+        return None, ({'success': False, 'error': 'ไม่มีสิทธิ์ใช้พื้นที่ที่ร้องขอ'}, 403)
+
+    requested_approver = str(data.get('approver') or '').strip()
+    if requested_approver not in profile['allowed_approvers']:
+        return None, ({'success': False, 'error': 'ไม่มีสิทธิ์ใช้ผู้อนุมัติที่ร้องขอ'}, 403)
+    if requested_mode == 'submit' and not profile['can_submit']:
+        return None, ({'success': False, 'error': 'บัญชีนี้ไม่มีสิทธิ์ส่งข้อมูลจริง'}, 403)
+
+    for record in data.get('records') or []:
+        record_tambon = _normalize_tambon_name(record.get('tambon') or data.get('tambon'))
+        if record_tambon and record_tambon not in {
+            _normalize_tambon_name(item) for item in profile['allowed_tambons']
+        }:
+            return None, ({'success': False, 'error': 'ข้อมูลแถวมีตำบลนอกสิทธิ์'}, 403)
+
+    return {
+        'tambon': next(iter(normalized_requested)),
+        'role': profile['role'],
+        'office_name': profile['office_name'],
+        'approver': requested_approver,
+        'mode': requested_mode,
+    }, None
+
+
+@app.before_request
+def set_csp_nonce():
+    # A fresh nonce per response authorizes only the JSON-LD script rendered by
+    # the server; all executable JavaScript remains external and same-origin.
+    g.csp_nonce = secrets.token_urlsafe(16)
+
+
+@app.context_processor
+def inject_csp_nonce():
+    return {'csp_nonce': getattr(g, 'csp_nonce', '')}
 
 
 @app.before_request
@@ -113,10 +220,10 @@ def enforce_api_access_boundary():
 def handle_request_too_large(_error):
     return jsonify({'success': False, 'error': 'ไฟล์หรือคำขอมีขนาดใหญ่เกินกำหนด'}), 413
 
-# Strict CSP is shipped in Report-Only mode first because the legacy template
-# still contains inline event handlers, inline style attributes, and JSON-LD.
-# Set CSP_ENFORCE=1 only after the browser violation inventory is remediated.
-CSP_ENFORCE = os.getenv('CSP_ENFORCE', '').strip().lower() in {'1', 'true', 'yes'}
+# CSP is enforced by default in production after the inline-handler/style
+# migration. Development and test remain Report-Only unless explicitly enabled.
+_csp_default = '1' if APP_ENV in {'production', 'prod'} else ''
+CSP_ENFORCE = os.getenv('CSP_ENFORCE', _csp_default).strip().lower() in {'1', 'true', 'yes'}
 CSP_POLICY = (
     "default-src 'self'; "
     "base-uri 'self'; "
@@ -138,10 +245,21 @@ CSP_POLICY = (
 CSP_HEADER_NAME = 'Content-Security-Policy' if CSP_ENFORCE else 'Content-Security-Policy-Report-Only'
 
 
+def _csp_policy_for_request():
+    nonce = getattr(g, 'csp_nonce', '')
+    if not nonce:
+        return CSP_POLICY
+    return CSP_POLICY.replace(
+        "script-src 'self';",
+        f"script-src 'self' 'nonce-{nonce}';",
+        1,
+    )
+
+
 @app.after_request
 def add_security_headers(response):
     """Attach browser hardening headers without logging request credentials."""
-    response.headers[CSP_HEADER_NAME] = CSP_POLICY
+    response.headers[CSP_HEADER_NAME] = _csp_policy_for_request()
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
@@ -272,7 +390,6 @@ def _page_diagnostics(page):
                 workflowControls[selector] = {
                     present: true,
                     optionCount: el.options ? el.options.length : 0,
-                    value: el.value || '',
                     ariaHidden: el.getAttribute('aria-hidden'),
                     display: style.display,
                     visibility: style.visibility,
@@ -280,10 +397,8 @@ def _page_diagnostics(page):
                 };
             }
             return {
-                url: window.location.href,
-                title: document.title,
+                urlPath: window.location.pathname,
                 readyState: document.readyState,
-                bodyText: (document.body?.innerText || '').slice(-2000),
                 loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
                 workflowReady: workflowControls['#PL_YAER']?.present && workflowControls['#PL_YAER'].optionCount > 1 &&
                     workflowControls['#PL_MOUNT']?.present && workflowControls['#PL_MOUNT'].optionCount >= 1 &&
@@ -1218,8 +1333,8 @@ def load_historical_activity_pool():
 
                 if workbook_loaded:
                     sources.append(workbook_name)
-            except Exception as exc:
-                errors.append(f"{workbook_name}: {exc}")
+            except Exception:
+                errors.append(f"{workbook_name}: ไม่สามารถอ่านไฟล์อ้างอิงได้")
 
         _historical_activity_pool_cache = sorted(
             weighted.values(),
@@ -1234,355 +1349,6 @@ def load_historical_activity_pool():
         )
 
 
-def load_excel_records_with_gemini(xls_path, sheet_name, api_key, office_name=None, default_tambon=None):
-    if not os.path.exists(xls_path):
-        return []
-
-    office = _normalize_office_place(office_name)
-    default_tb = (default_tambon or "").strip() or "ตำบล"
-    if default_tb and not default_tb.startswith("ตำบล") and not default_tb.startswith("แขวง"):
-        default_tb_display = f"ตำบล{default_tb}"
-    else:
-        default_tb_display = default_tb
-
-    try:
-        year_num, portal_month_val, month_num = parse_sheet_name(sheet_name, xls_path=xls_path)
-    except Exception as ex:
-        year_num, portal_month_val, month_num = "2569", "69", 6
-        
-    xl = pd.ExcelFile(xls_path)
-    df = xl.parse(sheet_name)
-    
-    raw_rows = []
-    row_no = 0
-    for idx in range(4, len(df)):
-        row = df.iloc[idx]
-        date_raw = row.iloc[1]
-        activity_raw = row.iloc[2]
-        tool_raw = row.iloc[3]
-        location_raw = row.iloc[4]
-        target_raw = row.iloc[5]
-        co_workers_raw = row.iloc[6]
-        tambon_raw = row.iloc[7]
-        
-        if pd.isna(date_raw) and pd.isna(activity_raw):
-            continue
-            
-        date_str = str(date_raw).strip() if not pd.isna(date_raw) else ""
-        activity = str(activity_raw).strip() if not pd.isna(activity_raw) else ""
-        tool = str(tool_raw).strip() if not pd.isna(tool_raw) else ""
-        location = str(location_raw).strip() if not pd.isna(location_raw) else ""
-        target = str(target_raw).strip() if not pd.isna(target_raw) else ""
-        co_workers = str(co_workers_raw).strip() if not pd.isna(co_workers_raw) else ""
-        tambon = str(tambon_raw).strip() if not pd.isna(tambon_raw) else ""
-        
-        if not date_str and not activity:
-            continue
-            
-        be_date = parse_date_to_be(date_str, month_num, int(year_num))
-        
-        row_no += 1
-        raw_rows.append({
-            "id": row_no,
-            "excel_date": date_str,
-            "date": be_date,
-            "activity_raw": activity,
-            "tool_raw": tool,
-            "location_raw": location,
-            "target_raw": target,
-            "co_workers": co_workers,
-            "tambon_raw": tambon
-        })
-        
-    if not raw_rows:
-        return []
-
-    client = genai.Client(api_key=api_key)
-    
-    prompt = """คุณเป็นผู้เชี่ยวชาญด้านระบบ T&V (Training and Visit) ของกรมส่งเสริมการเกษตร (DOAE)
-หน้าที่ของคุณคือวิเคราะห์แต่ละแถวจากแผนปฏิบัติงานรายเดือน (Excel) แล้วจำแนกข้อมูลให้ตรงกับรหัสที่ใช้ในระบบ T&V Portal (Workflow 26) อย่างแม่นยำ
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 1: ตารางรหัสประเด็นงาน (issue_val) และกิจกรรมหลัก (activity_val)
-═══════════════════════════════════════════════════════════════
-
-┌──────────────────────────────────────────────────────────────
-│ ประเด็น 1: การถ่ายทอดความรู้ (TRAINING/MEETING) │ issue_val = "1"
-│
-│ activity_val │ ชื่อกิจกรรม                          │ คำสำคัญในข้อมูลดิบ (Keywords)
-│ ────────────┼──────────────────────────────────────┼──────────────────────────────
-│ "14"        │ ประชุมสัปดาห์ (Weekly Meeting: WM)   │ WM, ประชุมสัปดาห์, ประชุมประจำสัปดาห์, Weekly
-│ "13"        │ ประชุมอำเภอ (District Meeting: DM)   │ DM, ประชุมอำเภอ, ประชุมสำนักงานเกษตรอำเภอ, District Meeting
-│ "12"        │ ประชุมเดือน (Monthly Meeting: MM)    │ MM, ประชุมเดือน, ประชุมประจำเดือน, Monthly Meeting
-│ "11"        │ ประชุมจังหวัด (Provincial Meeting: PM)│ PM, ประชุมจังหวัด, ประชุมสำนักงานเกษตรจังหวัด
-│ "1"         │ สัมมนาระดับชาติ (National Workshop: NW)│ NW, สัมมนาระดับชาติ, ประชุมกรม
-│ "6"         │ สัมมนาระดับเขต (Regional Workshop: RW)│ RW, สัมมนาเขต, ประชุมเขต
-│ "7"         │ สัมมนาระดับจังหวัด (Provincial Workshop: PW)│ PW, อบรมจังหวัด, สัมมนาจังหวัด
-│ "8"         │ สัมมนาระดับอำเภอ (District Workshop: DW)│ DW, อบรมอำเภอ, สัมมนาอำเภอ
-│ "9"         │ ประชุมผู้บริหารระดับกรม               │ ผู้บริหารกรม, ประชุมกรม
-│ "10"        │ ประชุมหัวหน้าส่วนราชการระดับเขต       │ หัวหน้าส่วนเขต, ประชุมเขต
-│ "999"       │ อื่นๆ (Other training/meetings)      │ ประชุมที่ไม่ตรงกับรหัสข้างต้น, ประชุมชี้แจง, ประชุมนอกรอบ
-│
-│ ⚠️ เงื่อนไขสำคัญ: ถ้ากิจกรรมเป็น "ประชุม" แต่ในชื่อกิจกรรมมีคำเกี่ยวกับโครงการเฉพาะ
-│    (เช่น "ประชุมแปลงใหญ่", "ประชุมวิสาหกิจชุมชน") → จัดเป็นประเด็น 2 (VISITING) ตามโครงการนั้น
-│    ไม่ใช่ประเด็น 1 เพราะ "ประชุม" เป็นแค่วิธีการ แต่เนื้อหาคือเยี่ยมเยียน
-└──────────────────────────────────────────────────────────────
-
-┌──────────────────────────────────────────────────────────────
-│ ประเด็น 2: การเยี่ยมเยียน (VISITING/FIELDWORK) │ issue_val = "2"
-│
-│ activity_val │ ชื่อกิจกรรม                          │ คำสำคัญ / ตัวอย่างข้อมูลดิบ
-│ ────────────┼──────────────────────────────────────┼──────────────────────────────
-│ "2"         │ ศพก. (ศูนย์เรียนรู้ฯ)               │ ศพก, ศพก., ศูนย์เรียนรู้, ศูนย์เรียนรู้เพิ่มประสิทธิภาพ
-│ "15"        │ เกษตรแปลงใหญ่                        │ แปลงใหญ่, เกษตรแปลงใหญ่, นาแปลงใหญ่
-│ "16"        │ Smart Farmer / Young Smart Farmer    │ Smart Farmer, SF, YSF, สมาร์ทฟาร์มเมอร์, เกษตรกรปราดเปรื่อง
-│ "17"        │ Zoning by Agri-Map                   │ Zoning, Agri-Map, โซนนิ่ง
-│ "18"        │ โครงการอันเนื่องมาจากพระราชดำริ       │ พระราชดำริ, โครงการหลวง, เศรษฐกิจพอเพียง
-│ "19"        │ วิสาหกิจชุมชน                        │ วิสาหกิจชุมชน, วสช, กลุ่มวิสาหกิจ
-│ "20"        │ กลุ่มเกษตรกร / กลุ่มแม่บ้าน          │ กลุ่มเกษตรกร, กลุ่มแม่บ้าน, องค์กรเกษตรกร, พัฒนาเกษตรกร, 3ก, สมาชิกกลุ่ม, กลุ่มส่งเสริม
-│ "21"        │ เกษตรทฤษฎีใหม่                       │ ทฤษฎีใหม่, เกษตรทฤษฎีใหม่
-│ "22"        │ เกษตรอินทรีย์                        │ เกษตรอินทรีย์, อินทรีย์, GAP, 5 ดี, 5ดี, เกษตรปลอดภัย
-│ "23"        │ ตลาดสินค้าเกษตร                      │ ตลาดเกษตร, ตลาดสินค้า, ตลาด, จำหน่ายสินค้า
-│ "24"        │ พัฒนาคุณภาพสินค้าเกษตร / สุขภาพพืช   │ คุณภาพสินค้า, มาตรฐานสินค้า, ยกระดับคุณภาพ, สุขภาพพืช, จัดการศัตรูพืช, IPM
-│ "25"        │ บริหารจัดการทรัพยากรน้ำ               │ ทรัพยากรน้ำ, จัดการน้ำ, ชลประทาน, แหล่งน้ำ
-│ "26"        │ พัฒนาสถาบันเกษตรกรรูปแบบประชารัฐ      │ ประชารัฐ, สถาบันเกษตรกร
-│ "27"        │ ธนาคารสินค้าเกษตร                    │ ธนาคารสินค้า, ธนาคารเกษตร
-│ "28"        │ จัดระเบียบการประมง                    │ ประมง, IUU
-│ "29"        │ ส่งเสริมเครื่องจักรกล                │ เครื่องจักร, เครื่องจักรกล, จักรกลเกษตร
-│ "30"        │ ช่วยเหลือด้านหนี้สิน                 │ หนี้สิน, ปัญหาหนี้, สินเชื่อ
-│ "31"        │ แผนผลิตข้าวครบวงจร                   │ ข้าวครบวงจร, แผนข้าว
-│ "999"       │ อื่นๆ                                │ เยี่ยมเยียนทั่วไป, ลงพื้นที่, สำรวจ, ติดตามงาน, เยี่ยมเกษตรกร,
-│             │                                      │ ส่งเสริมการปลูก, ถ่ายทอดเทคโนโลยี, สิ่งแวดล้อม, งานรณรงค์, งานวันถ่ายทอด
-│
-│ ℹ️ ประเด็น 2 เป็นประเด็นเริ่มต้น (default) — ถ้ากิจกรรมเป็นงานภาคสนาม/เยี่ยมเยียน
-│    แต่ไม่ตรงกับรหัสเฉพาะใดเลย → ใช้ activity_val = "999" พร้อมสรุป other_text
-└──────────────────────────────────────────────────────────────
-
-┌──────────────────────────────────────────────────────────────
-│ ประเด็น 3: การสนับสนุน (SUPPORTING) │ issue_val = "3"
-│
-│ activity_val │ ชื่อกิจกรรม                          │ คำสำคัญ
-│ ────────────┼──────────────────────────────────────┼──────────────────────────────
-│ "3"         │ ด้านโครงสร้างและอุปกรณ์               │ อุปกรณ์, สนับสนุนวัสดุ, โครงสร้างพื้นฐาน, ซ่อมบำรุง
-│ "33"        │ เพิ่มสมรรถนะและสร้างขวัญกำลังใจ       │ สร้างขวัญ, เพิ่มสมรรถนะ, กำลังใจ, สวัสดิการ
-│ "34"        │ ด้านวิชาการ                          │ สนับสนุนวิชาการ, เอกสารวิชาการ
-│ "999"       │ อื่นๆ                                │ สนับสนุนอื่นๆ
-└──────────────────────────────────────────────────────────────
-
-┌──────────────────────────────────────────────────────────────
-│ ประเด็น 4: การนิเทศงาน (SUPERVISION) │ issue_val = "4"
-│
-│ activity_val │ ชื่อกิจกรรม                          │ คำสำคัญ
-│ ────────────┼──────────────────────────────────────┼──────────────────────────────
-│ "999"       │ อื่นๆ                                │ นิเทศ, นิเทศงาน, ตรวจเยี่ยมราชการ, ตรวจติดตาม (จากผู้บังคับบัญชา)
-│
-│ ⚠️ "นิเทศ" = ผู้บังคับบัญชามาตรวจงาน ≠ "เยี่ยมเยียน" = เจ้าหน้าที่ลงพื้นที่เยี่ยมเกษตรกร
-└──────────────────────────────────────────────────────────────
-
-┌──────────────────────────────────────────────────────────────
-│ ประเด็น 5: การจัดการข้อมูล (DATA MANAGEMENT) │ issue_val = "5"
-│
-│ activity_val │ ชื่อกิจกรรม                          │ คำสำคัญ
-│ ────────────┼──────────────────────────────────────┼──────────────────────────────
-│ "4"         │ ด้านข้อมูลสารสนเทศ                   │ ทะเบียนเกษตรกร, ทบก, ปรับปรุงทะเบียน, ขึ้นทะเบียน, ระบบสารสนเทศ,
-│             │                                      │ บันทึกข้อมูล, คีย์ข้อมูล, จัดทำข้อมูล, ฐานข้อมูล, รายงานข้อมูล
-│ "36"        │ ด้านแผนพัฒนาการเกษตร                 │ แผนพัฒนา, แผนการเกษตร, จัดทำแผน
-│ "999"       │ อื่นๆ                                │ งานจัดการข้อมูลอื่นๆ, งานสารบรรณ, งานธุรการ
-└──────────────────────────────────────────────────────────────
-
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 2: กฎการจำแนกประเภทและลำดับการตัดสิน (Classification Rules & Priority)
-═══════════════════════════════════════════════════════════════
-
-ขั้นตอน A: ตรวจสอบว่าแถวเป็นกิจกรรมจริงหรือไม่ → กำหนด should_include
-
-  ✅ should_include = true เมื่อ:
-    - มีวันที่ (date) + มีชื่อกิจกรรม (activity_raw) อธิบายการทำงานจริง
-    - เป็นกิจกรรมประจำวัน เช่น ลงพื้นที่, ประชุม, อบรม, เยี่ยมเยียน, ทำทะเบียน
-    - แม้ activity_raw จะมีแค่คำสั้นๆ เช่น "ลงพื้นที่" ก็ถือว่าเป็นกิจกรรมจริง
-
-  ❌ should_include = false เมื่อ:
-    - เป็นวันหยุดราชการ, วันหยุดนักขัตฤกษ์ (เช่น "วันวิสาขบูชา", "วันจักรี", "วันแรงงาน")
-    - เป็นวันหยุดเสาร์-อาทิตย์ ที่ activity_raw ว่างเปล่าหรือเขียนว่า "หยุด", "หยุดราชการ", "วันหยุด"
-    - เป็นวันลา (เช่น "ลาพักผ่อน", "ลาป่วย", "ลากิจ")
-    - activity_raw ว่างเปล่า, เป็น nan, เป็น "-" หรือเป็นแค่หมายเหตุ/หัวข้อ
-    - มีเฉพาะวันที่แต่ไม่มีกิจกรรม (ไม่มีเนื้องาน)
-
-ขั้นตอน B: จำแนกประเด็นงานและกิจกรรม → issue_val + activity_val
-
-  ลำดับการพิจารณา (Priority - ตรวจตามลำดับ หยุดที่ข้อแรกที่ตรง):
-
-  1. ตรวจคำสำคัญเฉพาะทาง (Specific Keywords First):
-     - ถ้ามีคำว่า "ทะเบียนเกษตรกร" หรือ "ทบก" → issue "5", activity "4"
-     - ถ้ามีคำว่า "ศพก" → issue "2", activity "2"
-     - ถ้ามีคำว่า "แปลงใหญ่" → issue "2", activity "15"
-     - ถ้ามีคำว่า "วิสาหกิจชุมชน" → issue "2", activity "19"
-     - ถ้ามีคำว่า "Smart Farmer" หรือ "สมาร์ทฟาร์ม" → issue "2", activity "16"
-     - ถ้ามีคำว่า "อินทรีย์" หรือ "GAP" หรือ "5 ดี" → issue "2", activity "22"
-     - ถ้ามีคำว่า "นิเทศ" → issue "4", activity "999"
-     (... ตรวจคำสำคัญอื่นๆ ตามตารางด้านบนให้ครบทุก activity_val)
-
-  2. ถ้ามีคำว่า "ประชุม" + ไม่มีคำเฉพาะโครงการ → issue "1":
-     - แยกประเภทย่อยตามคำต่อท้าย: WM/สัปดาห์ → "14", DM/อำเภอ → "13", MM/ประจำเดือน → "12" ฯลฯ
-     - ถ้าไม่ตรงกับรหัสย่อยใด → issue "1", activity "999"
-
-  3. ถ้าไม่ตรงกับรหัสเฉพาะใดเลย → ใช้ issue "2", activity "999":
-     - กรณีนี้ต้องกำหนด other_text เป็นคำสรุปภาษาไทยสั้นๆ ไม่เกิน 30 ตัวอักษร
-     - เช่น: "ลงพื้นที่ติดตามงาน" → other_text = "ติดตามงานในพื้นที่"
-     - เช่น: "รณรงค์ไม่เผาตอซัง" → other_text = "รณรงค์สิ่งแวดล้อม"
-
-ขั้นตอน C: กำหนด other_text
-
-  - ถ้า activity_val ไม่ใช่ "999" → other_text = "" (เว้นว่าง)
-  - ถ้า activity_val = "999" → other_text = คำอธิบายสั้นๆ ภาษาไทย (ไม่เกิน 30 ตัวอักษร)
-    - ห้ามใช้ชื่อกิจกรรมดิบทั้งข้อความ ให้สรุปใจความหลักเท่านั้น
-    - ตัวอย่าง:
-      * "ติดตามสถานการณ์น้ำท่วมพื้นที่การเกษตร" → "ติดตามน้ำท่วม"
-      * "จัดงานวันถ่ายทอดเทคโนโลยี (Field Day)" → "งาน Field Day"
-      * "ลงพื้นที่ส่งเสริมการปลูกข้าวโพดเลี้ยงสัตว์หลังฤดูทำนา" → "ส่งเสริมข้าวโพดหลังนา"
-      * "ร่วมพิธีเปิดงานเกษตรแห่งชาติ" → "พิธีเปิดงานเกษตร"
-
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 3: กฎสถานที่ (Location Rules)
-═══════════════════════════════════════════════════════════════
-
-กฎหลัก: สถานที่ (location) ต้องเป็นสถานที่ทางกายภาพจริงเท่านั้น
-
-  ชื่อสำนักงานเกษตรอำเภอของพื้นที่นี้: """ + office + """
-  ตำบลเริ่มต้นของพื้นที่นี้: """ + default_tb_display + """
-
-  1. ถ้า issue_val = "1" (ประชุม/อบรม):
-     → location = ชื่อสำนักงานเกษตรอำเภอข้างต้น เสมอ
-
-  2. ถ้า issue_val ≠ "1":
-     → ใช้ location_raw ที่เป็นชื่อสถานที่จริง เช่น ชื่อหมู่บ้าน, หมู่, ตำบล, ศพก.
-     → แต่ถ้า location_raw เป็นสิ่งต่อไปนี้ ให้ถือว่าไม่ถูกต้อง:
-       ❌ คำที่เป็นวิธีการ/เครื่องมือ: "ชี้แจง/ประชาสัมพันธ์", "แผ่นพับ", "ประชุม",
-          "สาธิต", "อบรม", "เอกสาร", "Line", "Facebook", "ออนไลน์"
-       ❌ คำที่มีจุดไข่ปลา: "ตำบล…...", "ตำบล...", "....."
-       ❌ ค่าว่างเปล่า, "nan", "-"
-     → เมื่อ location_raw ไม่ถูกต้อง:
-       • ใช้ค่า tambon_raw แทน (เติมคำว่า ตำบล ถ้าจำเป็น)
-       • ถ้า tambon_raw ก็ว่าง → ใช้ตำบลเริ่มต้นของพื้นที่นี้
-
-  3. ถ้า location_raw เป็นชื่อตำบลเปล่าๆ:
-     → เติมคำนำหน้า "ตำบล"
-
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 4: กฎการแปลงเป้าหมาย (target_num Rules)
-═══════════════════════════════════════════════════════════════
-
-แปลง target_raw → target_num (integer) ตามลำดับ:
-
-  1. ถ้ามีตัวเลขชัดเจน → ดึงตัวเลขออกมา
-     - "15 ราย" → 15
-     - "เกษตรกร 20 คน" → 20
-     - "30" → 30
-     - "3-5 ราย" → ใช้จำนวนสูงสุด → 5
-     - "จนท 4 คน + เกษตรกร 10 ราย" → รวมเป็น 14
-
-  2. ถ้าเป็นคำไม่ระบุจำนวนชัดเจน → default = 7
-     - "จนท" หรือ "จนท." → 7
-     - "ทุกคน", "ทุกท่าน" → 7
-     - "เจ้าหน้าที่" → 7
-     - "คณะทำงาน" → 7
-
-  3. ถ้าไม่มีข้อมูลหรือเป็นค่าว่าง → default = 0
-     - "", "nan", "-" → 0
-
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 5: กรณีพิเศษและข้อยกเว้น (Edge Cases)
-═══════════════════════════════════════════════════════════════
-
-  1. กิจกรรมซ้ำหลายวัน: แต่ละแถวมี id เป็นเอกลักษณ์ → วิเคราะห์แยกทีละแถว อย่ารวม
-  2. วันที่มีหลายกิจกรรม: แต่ละแถวคือหนึ่งกิจกรรม → ให้ issue_val/activity_val ตามกิจกรรมของแถวนั้น
-  3. กิจกรรมกำกวม: ถ้าตัดสินใจไม่ได้ → ใช้ issue_val = "2", activity_val = "999"
-  4. ข้อมูลซ้ำใน activity_raw กับ tool_raw: พิจารณาจาก activity_raw เป็นหลัก tool_raw เป็นข้อมูลเสริม
-  5. ตัวอักษรย่อ: WM = Weekly, DM = District, MM = Monthly, PM = Provincial, NW/RW/PW/DW = Workshop ระดับต่างๆ
-  6. คำว่า "ประชุม" + ชื่อโครงการ: จัดตามโครงการ (issue 2) ไม่ใช่ตามประชุม (issue 1)
-     - "ประชุมแปลงใหญ่" → issue "2", activity "15"
-     - "ประชุมกลุ่มวิสาหกิจชุมชน" → issue "2", activity "19"
-     - "ประชุมประจำเดือน" → issue "1", activity "12"
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 6: ข้อมูลดิบจาก Excel (Input Data)
-═══════════════════════════════════════════════════════════════
-
-""" + json.dumps(raw_rows, ensure_ascii=False, indent=2) + """
-
-═══════════════════════════════════════════════════════════════
-ส่วนที่ 7: รูปแบบ JSON ที่ต้องการ (Required Output Format)
-═══════════════════════════════════════════════════════════════
-
-ตอบเป็น JSON Array เท่านั้น ห้ามมีข้อความอื่นนอก JSON
-แต่ละ object ต้องมี key ครบทุกตัวตามนี้:
-
-{
-  "id":              (integer - ตรงกับ id ของ input row),
-  "should_include":  (boolean - true = กิจกรรมจริง, false = หยุด/ลา/ว่าง),
-  "issue_val":       (string - "1"|"2"|"3"|"4"|"5"),
-  "activity_val":    (string - รหัสกิจกรรมย่อย เช่น "14", "2", "999"),
-  "other_text":      (string - คำอธิบายถ้า activity_val="999", มิฉะนั้น ""),
-  "location":        (string - สถานที่ทางกายภาพจริง),
-  "target_num":      (integer - จำนวนเป้าหมาย/คน)
-}
-
-ตัวอย่าง Output:
-[
-  {"id": 1, "should_include": true, "issue_val": "1", "activity_val": "12", "other_text": "", "location": """ + office + """, "target_num": 7},
-  {"id": 2, "should_include": false, "issue_val": "2", "activity_val": "999", "other_text": "", "location": "", "target_num": 0},
-  {"id": 3, "should_include": true, "issue_val": "2", "activity_val": "19", "other_text": "", "location": """ + default_tb_display + """, "target_num": 15}
-]
-"""
-
-    response = client.models.generate_content(
-        model='gemini-2.0-flash',
-        contents=prompt,
-        config={'response_mime_type': 'application/json'}
-    )
-    
-    gemini_data = json.loads(response.text)
-    
-    records = []
-    gemini_map = {item["id"]: item for item in gemini_data}
-    
-    for row in raw_rows:
-        row_id = row["id"]
-        g_item = gemini_map.get(row_id)
-        if not g_item or not g_item.get("should_include", True):
-            continue
-        
-        # Post-process: validate location is a real place, not a tool name
-        raw_location = g_item.get("location", row["location_raw"])
-        issue_val = g_item.get("issue_val", "2")
-        validated_location = sanitize_location(
-            raw_location, row["tool_raw"], row.get("tambon_raw", ""), issue_val,
-            office_name=office, default_tambon=default_tb
-        )
-
-        records.append({
-            "id": row_id,
-            "excel_date": row["excel_date"],
-            "date": row["date"],
-            "activity": row["activity_raw"],
-            "tool": row["tool_raw"],
-            "location": validated_location,
-            "tambon": row.get("tambon_raw", "") or default_tb,
-            "target_raw": row["target_raw"],
-            "target_num": g_item.get("target_num", 0),
-            "co_workers": row["co_workers"],
-            "issue_val": issue_val,
-            "activity_val": g_item.get("activity_val", "999"),
-            "other_text": g_item.get("other_text", "")
-        })
-
-    for i, rec in enumerate(records, start=1):
-        rec["id"] = i
-    return apply_sida_office_meeting_rules(records, office_name=office)
 
 @app.route('/api/access/status')
 def access_status():
@@ -1816,29 +1582,16 @@ def get_records():
     sheet = request.args.get('sheet', 'มิ.ย.69')
     temp_filename = request.args.get('temp_filename', '').strip()
     xls_path = _resolve_workbook_path(temp_filename)
-    api_key = request.headers.get('X-Gemini-API-Key', '').strip()
     office_name = request.args.get('office_name', '').strip() or request.headers.get('X-Office-Name', '').strip()
     default_tambon = request.args.get('tambon', '').strip() or request.headers.get('X-Tambon', '').strip()
     try:
         if not xls_path or not os.path.isfile(xls_path):
             return jsonify({"success": False, "error": "ไม่พบไฟล์หรือไม่มีสิทธิ์เข้าถึงไฟล์"}), 404
-        if api_key:
-            print("Using Gemini API for parsing and classification...")
-            try:
-                records = load_excel_records_with_gemini(
-                    xls_path, sheet, api_key,
-                    office_name=office_name, default_tambon=default_tambon
-                )
-            except Exception as e_gemini:
-                print(f"Gemini parsing failed ({e_gemini}), falling back to rules-based parser...")
-                records = load_excel_records(
-                    xls_path, sheet, office_name=office_name, default_tambon=default_tambon
-                )
-        else:
-            print("Using rules-based parser (no Gemini API Key provided)...")
-            records = load_excel_records(
-                xls_path, sheet, office_name=office_name, default_tambon=default_tambon
-            )
+        # Excel is processed locally with the deterministic rules-based parser.
+        # No workbook data or external AI API key is sent to a third party.
+        records = load_excel_records(
+            xls_path, sheet, office_name=office_name, default_tambon=default_tambon
+        )
 
         return jsonify({"success": True, "records": records})
     except Exception:
@@ -2101,20 +1854,22 @@ def run_automation():
     global _run_active
     data = request.json or {}
     records = data.get('records', [])
+    run_context, authorization_error = _validate_run_authorization(data)
+    if authorization_error:
+        error_body, error_status = authorization_error
+        return jsonify(error_body), error_status
+
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     sheet_name = data.get('sheet', 'มิ.ย.69')
-    tambon = data.get('tambon', '')
-    role = data.get('role', 'officer')
-    office_name = data.get('office_name', '')
-    approver = data.get('approver', '')
+    tambon = run_context['tambon']
+    role = run_context['role']
+    office_name = run_context['office_name']
+    approver = run_context['approver']
     headless = data.get('headless', False)
     if sys.platform != 'win32' or os.environ.get('HEADLESS', '0') == '1':
         headless = True
-    mode = data.get('mode', 'dry_run')
-    if 'dry_run' in data and mode == 'dry_run':
-        if not data['dry_run']:
-            mode = 'submit'
+    mode = run_context['mode']
 
     # Each officer must supply their own T&V account — never use shared defaults
     if not username or not password:

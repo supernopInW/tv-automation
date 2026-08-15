@@ -1,11 +1,10 @@
+import os
 from pathlib import Path
-import sys
-import types
 
-# app.py imports Google GenAI, but this test exercises only Playwright helpers.
-sys.modules.setdefault("google", types.ModuleType("google"))
-sys.modules.setdefault("google.genai", types.ModuleType("google.genai"))
-sys.modules["google"].genai = sys.modules["google.genai"]
+# Offline tests intentionally use in-memory limiter storage.
+os.environ['APP_ENV'] = 'test'
+os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
+os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
 
 import app
 

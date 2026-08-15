@@ -39,14 +39,28 @@ jobs:
         run: |
           node --check static/auth.js
           node --check static/app.js
+          node --check static/csp-bindings.js
       - name: Run offline regression tests
         run: |
           python test_security_headers.py
+          python test_security_check.py
           python test_selector2_readiness.py
           python test_workflow26_hardening.py
           if [ -f test_clear_credentials.js ]; then node test_clear_credentials.js; fi
+      - name: Check production security requirements
+        run: python scripts/security_check.py
       - name: Check whitespace errors
         run: git diff --check
+
+  docker-build:
+    name: Docker build validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build production image
+        run: docker build --no-cache --tag tv-automation-test:ci .
+      - name: Compile application inside image
+        run: docker run --rm --entrypoint python3 -e APP_ENV=test -e PYTHONPYCACHEPREFIX=/tmp/pycache tv-automation-test:ci -m py_compile app.py
 
   dependency-audit:
     name: Python dependency audit
@@ -58,11 +72,12 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
-      - name: Audit requirements.txt
+      - name: Audit pinned dependency manifests
         run: |
           python -m pip install --upgrade pip
           python -m pip install pip-audit==2.10.1
           pip-audit -r requirements.txt
+          pip-audit -r requirements.lock
 
   semgrep:
     name: DOM XSS regression rules
@@ -112,6 +127,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
       - uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
         with:
           category: '/language:${{ matrix.language }}'
@@ -130,20 +146,21 @@ jobs:
   security-gate:
     name: Security Gate
     if: always()
-    needs: [tests, dependency-audit, semgrep, codeql, secret-scan]
+    needs: [tests, docker-build, dependency-audit, semgrep, codeql, secret-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Require all security checks to pass
         env:
           TESTS: ${{ needs.tests.result }}
+          DOCKER: ${{ needs.docker-build.result }}
           DEPENDENCIES: ${{ needs.dependency-audit.result }}
           SEMGREP: ${{ needs.semgrep.result }}
           CODEQL: ${{ needs.codeql.result }}
           SECRETS: ${{ needs.secret-scan.result }}
         run: |
           set -euo pipefail
-          printf 'tests=%s\ndependencies=%s\nsemgrep=%s\ncodeql=%s\nsecrets=%s\n' \
-            "$TESTS" "$DEPENDENCIES" "$SEMGREP" "$CODEQL" "$SECRETS"
-          for result in "$TESTS" "$DEPENDENCIES" "$SEMGREP" "$CODEQL" "$SECRETS"; do
+          printf 'tests=%s\ndocker=%s\ndependencies=%s\nsemgrep=%s\ncodeql=%s\nsecrets=%s\n' \
+            "$TESTS" "$DOCKER" "$DEPENDENCIES" "$SEMGREP" "$CODEQL" "$SECRETS"
+          for result in "$TESTS" "$DOCKER" "$DEPENDENCIES" "$SEMGREP" "$CODEQL" "$SECRETS"; do
             [ "$result" = success ] || { echo 'Security Gate failed.'; exit 1; }
           done

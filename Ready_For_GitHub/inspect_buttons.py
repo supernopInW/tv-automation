@@ -1,13 +1,14 @@
 import time
 import sys
 import os
+import tempfile
 from playwright.sync_api import sync_playwright
 
 def main():
     username = os.environ.get('TV_USERNAME', '') or input('Enter username: ')
     password = os.environ.get('TV_PASSWORD', '') or input('Enter password: ')
     
-    output_path = r"C:\Users\Admin\.gemini\antigravity\brain\ba0e89de-5c2f-4b8f-8204-3a2f30836046\scratch\buttons_info.txt"
+    output_path = os.path.join(tempfile.gettempdir(), 'tv-automation-buttons-info.txt')
     
     print("Launching browser...")
     with sync_playwright() as p:

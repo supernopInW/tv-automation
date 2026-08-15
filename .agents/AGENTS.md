@@ -34,11 +34,11 @@
 
 - **Backend:** Python 3.10+, Flask, Pandas, openpyxl, xlrd
 - **Automation Engine:** Playwright (Chromium Async/Sync API) สำหรับควบคุม Headless/Headed Browser ไปยังระบบ T&V
-- **AI Integration:** Google GenAI SDK (`google-genai`) สำหรับฟีเจอร์ช่วยวิเคราะห์/ประมวลผลข้อความจากแผน Excel
+- **Data Processing:** Local rules-based parser สำหรับอ่านและจำแนกข้อมูล Excel โดยไม่มีการเชื่อมต่อ external AI API
 - **Frontend:** Vanilla HTML5, CSS3 (Modern Responsive Dashboard, CSS Variables, Glassmorphism design), Vanilla JavaScript (`static/app.js`)
 - **Data Persistence & Cache:** 
   - ข้อมูลภูมิศาสตร์ (จังหวัด/อำเภอ/ตำบล/หมู่บ้าน) เก็บเป็น JSON ใน `data/` และ `config/districts.json`
-  - รหัสผ่าน T&V ของผู้ใช้ **ไม่เก็บในฐานข้อมูลหรือไฟล์** (เก็บเฉพาะใน `sessionStorage` บน Browser ของผู้ใช้ชั่วคราวเท่านั้น)
+  - T&V username/password ของผู้ใช้ **ไม่เก็บในฐานข้อมูล ไฟล์ หรือ Web Storage**; อยู่ในหน่วยความจำของแท็บ/การรันและล้างหลังจบงาน
 - **Tunneling & Deployment:** รองรับ Cloudflare Tunnel (`cloudflared.exe`) และ Ngrok (`ngrok.exe`) เพื่อรันเปิดให้เครื่องอื่นใช้งานผ่านลิงก์ได้
 
 ---
@@ -52,7 +52,7 @@ tv_automation/
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
 ├── geo_data.py                # ตัวจัดการข้อมูลภูมิศาสตร์ (จังหวัด, อำเภอ, ตำบล, หมู่บ้าน)
-├── requirements.txt           # Python Dependencies (Flask, Playwright, Pandas, google-genai ฯลฯ)
+├── requirements.txt           # Python Dependencies ของ Flask, Playwright, Pandas และ parser แบบ local
 ├── Dockerfile & .dockerignore # การ containerize สำหรับการ deploy (HF Spaces / VPS)
 ├── docker-compose.yml         # 🚀 การสั่งรันด้วย Docker Compose แบบ 1-Command
 ├── Upload_To_GitHub.bat       # 🐙 สคริปต์ทางลัดสำหรับ Push โค้ดลง GitHub (supernopInW/tv-automation)
@@ -190,3 +190,14 @@ python app.py
 ---
 
 *โปรดจำไว้: ทุกครั้งที่คุณทำการแก้ไขโปรเจกต์นี้ อย่าลืมกลับมารายงานการเปลี่ยนแปลงและปรับปรุงไฟล์ `AGENTS.md` นี้ให้สมบูรณ์ขึ้น!*
+
+
+## Security Audit รอบที่ 3 — remediation status
+
+- เปลี่ยน `APP_AUTH_REQUIRED` default เป็น `1` เพื่อ fail-closed; production จะไม่ยอมใช้ `memory://` เป็น rate-limit storage เมื่อ `APP_ENV=production`
+- เพิ่ม server-side authorization profile ผ่าน `APP_AUTH_ROLE`, `APP_AUTH_OFFICE_NAME`, `APP_AUTH_ALLOWED_TAMBONS`, `APP_AUTH_ALLOWED_APPROVERS` และ `APP_AUTH_CAN_SUBMIT`; `/api/run` ไม่เชื่อ role/office/tambon/approver/mode จาก client เมื่อเปิด app auth
+- เปลี่ยน Docker runtime เป็น non-root `appuser`, ใช้ `COPY --chown`, จำกัด writable path ไว้ที่ `/tmp/tv-automation-uploads` และเลิก `chmod -R 777`
+- Docker Compose bind port เป็น `127.0.0.1:7860:7860`, ใช้ UID 1000 และตั้ง `APP_AUTH_REQUIRED` default เป็น `1`
+- เพิ่ม exact-pinned `requirements.txt` และ `requirements.lock` เพื่อป้องกัน dependency drift
+- ลด portal diagnostics ให้ไม่ส่ง body text, title, full URL หรือค่าของ select กลับ authenticated client; คงเฉพาะ state ที่จำเป็นต่อการ debug
+- เพิ่ม security checker และ regression tests สำหรับ auth profile, rate-limit storage, Docker permission และ compose port; validation ล่าสุดผ่าน 23 tests และ checker 13/13 checks

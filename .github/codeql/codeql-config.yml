@@ -1,0 +1,8 @@
+name: tv-automation-codeql
+
+# The production source tree is the repository root. These directories are
+# synchronized/export archives and are excluded to avoid duplicate findings;
+# the root tree remains fully covered by CodeQL and the Security Gate.
+paths-ignore:
+  - Ready_For_GitHub/**
+  - Upload_To_GitHub/**

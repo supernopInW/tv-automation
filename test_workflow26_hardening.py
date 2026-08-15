@@ -1,13 +1,14 @@
 import json
-import sys
-import types
+import os
 from pathlib import Path
 
-# app.py imports Google GenAI lazily for optional Excel classification. The
-# hardening tests do not call Gemini, so provide an offline import stub.
-sys.modules.setdefault("google", types.ModuleType("google"))
-sys.modules.setdefault("google.genai", types.ModuleType("google.genai"))
-sys.modules["google"].genai = sys.modules["google.genai"]
+# Offline tests intentionally use in-memory limiter storage.
+os.environ['APP_ENV'] = 'test'
+os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
+os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
+
+# The application uses the deterministic local rules-based parser; no external
+# AI SDK stub is needed for these offline hardening tests.
 
 import app
 
@@ -48,17 +49,22 @@ def test_finalize_confirmed_by_portal_marker():
 
 
 def test_run_rejects_missing_credentials_without_starting_browser():
-    client = app.app.test_client()
-    csrf = client.get("/api/access/status").get_json()["csrf_token"]
-    response = client.post(
-        "/api/run",
-        json={"records": [], "mode": "dry_run"},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert response.status_code == 400
-    payload = response.get_json()
-    assert payload["success"] is False
-    assert "รหัสผ่าน" in payload["error"]
+    old_required = app.APP_AUTH_REQUIRED
+    app.APP_AUTH_REQUIRED = False
+    try:
+        client = app.app.test_client()
+        csrf = client.get("/api/access/status").get_json()["csrf_token"]
+        response = client.post(
+            "/api/run",
+            json={"records": [], "mode": "dry_run"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert response.status_code == 400
+        payload = response.get_json()
+        assert payload["success"] is False
+        assert "รหัสผ่าน" in payload["error"]
+    finally:
+        app.APP_AUTH_REQUIRED = old_required
 
 
 def test_diagnostics_never_include_password():
