@@ -1620,7 +1620,8 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER remained empty for activity 999")
 
     be_date = rec['date']
-    _set_modal_dates(page, be_date)
+    # The portal's PD_SDATE change handler clears PD_EDATE. Set both date
+    # fields after all generic modal events so the date pair is the final state.
 
     place = rec.get('location') or ''
     modal.locator('textarea#PD_DETAIL').fill(rec.get('activity') or '')
@@ -1648,6 +1649,9 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             btn.classList.remove('disabled');
         }
     }""")
+
+    # Set dates last because the portal clears PD_EDATE when PD_SDATE changes.
+    _set_modal_dates(page, be_date)
     validation_state = _modal_validation_state(page)
     required_fields = {
         "issue": str(rec.get("issue_val") or ""),

@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+from pathlib import Path
 
 # app.py imports Google GenAI lazily for optional Excel classification. The
 # hardening tests do not call Gemini, so provide an offline import stub.
@@ -61,12 +62,20 @@ def test_diagnostics_never_include_password():
     assert "password" not in json.dumps(result, ensure_ascii=False).lower()
 
 
+def test_modal_dates_are_set_after_generic_events_in_both_paths():
+    app_source = Path("app.py").read_text(encoding="utf-8")
+    cli_source = Path("automate_submission.py").read_text(encoding="utf-8")
+    assert app_source.index("# Trigger events on all inputs") < app_source.index("_set_modal_dates(page, be_date)")
+    assert cli_source.index("# Trigger input events") < cli_source.index("_set_modal_dates(page, rec['date'])")
+
+
 if __name__ == "__main__":
     tests = [
         test_finalize_unknown_without_success_marker,
         test_finalize_confirmed_by_portal_marker,
         test_run_rejects_missing_credentials_without_starting_browser,
         test_diagnostics_never_include_password,
+        test_modal_dates_are_set_after_generic_events_in_both_paths,
     ]
     for test in tests:
         test()

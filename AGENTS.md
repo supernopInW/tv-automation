@@ -248,4 +248,11 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - Retry บน Render ยืนยันว่า หลังเลือกปี 2569 ตัวเลือกใน `#PL_MOUNT` ถูกโหลดครบแล้ว แต่ `_wait_for_select_options()` ยังรายงาน `WORKFLOW_DYNAMIC_OPTION_ERROR` เนื่องจากการส่ง object argument ให้ `page.wait_for_function()` และการ destructuring argument ใน JavaScript predicate ไม่ทำงานตามที่คาดกับ Playwright sync runtime จริง.
 - ปรับ helper ใน `app.py` และ `automate_submission.py` ให้ serialize selector ด้วย `json.dumps()` แล้วฝัง selector และจำนวนขั้นต่ำลงใน predicate โดยตรง พร้อมตัดการส่ง argument object ออกทั้งหมด. วิธีนี้ยังคงป้องกัน selector injection จากค่าที่ไม่คาดคิดและทำให้ predicate ใช้ได้กับ runtime จริง.
 - ปรับ `test_selector2_readiness.py` ให้ตรวจ predicate แบบใหม่ว่า selector/minimum ถูกฝังถูกต้องและไม่มี positional arguments.
-- ผลตรวจสอบรอบ patch: targeted Select2 tests 4 กรณี, hardening tests 4 กรณี, `py_compile` และ `git diff --check` ผ่านทั้งหมดแบบ offline. ยังไม่ได้ Draft/Submit และยังไม่มีการส่งข้อมูลจริงไปพอร์ทัล.
+- ผลตรวจสอบรอบ patch: targeted Select2 tests 4 กรณี, hardening tests 5 กรณี, `py_compile` และ `git diff --check` ผ่านทั้งหมดแบบ offline. ยังไม่ได้ Draft/Submit และยังไม่มีการส่งข้อมูลจริงไปพอร์ทัล.
+
+## 16. แก้ Modal Date Event Ordering (2026-08-15)
+
+- Dry-run บน Render ผ่าน login, Workflow 26 readiness และ dynamic month wait แล้ว แต่ modal validation พบ `MODAL_FIELD_MISMATCH` ครบ 20 แถว เพราะ `#PD_EDATE` กลายเป็นค่าว่าง.
+- ตรวจ DOM จริงในพอร์ทัลพบว่า `#PD_SDATE` และ `#PD_EDATE` เป็น input `type="text"` ที่เริ่มต้น disabled และมี datepicker/inputmask. Event handler `change` ของ `#PD_SDATE` จะเปิดใช้งานและล้างค่า `#PD_EDATE` เพื่อรอช่วงวันที่.
+- สาเหตุคือโค้ดตั้งวันที่ทั้งคู่ก่อน generic event dispatch แต่ generic dispatch ส่ง `change` ซ้ำให้ `#PD_SDATE` หลังจากนั้น จึงล้าง `#PD_EDATE` อีกครั้ง. แก้ทั้ง `app.py` และ `automate_submission.py` ให้ `_set_modal_dates()` ทำงานหลัง generic events เป็นขั้นตอนสุดท้ายก่อน validation.
+- เพิ่ม regression assertion ใน `test_workflow26_hardening.py` ตรวจลำดับดังกล่าวทั้ง backend และ CLI. ผลทดสอบรอบนี้ผ่าน Select2 tests 4 กรณี, hardening tests 5 กรณี, `py_compile` และ `git diff --check` แบบ offline. ยังไม่ได้ Draft/Submit.

@@ -557,7 +557,8 @@ def main():
                         raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER remained empty for activity 999")
                     
                 print(f"  Filling Date: {rec['date']}")
-                _set_modal_dates(page, rec['date'])
+                # The portal clears PD_EDATE when PD_SDATE changes; set both
+                # date fields after generic modal events below.
                 
                 print(f"  Filling Detail: {rec['activity']}")
                 modal.locator('textarea#PD_DETAIL').fill(rec['activity'])
@@ -589,6 +590,9 @@ def main():
                         btn.classList.remove('disabled');
                     }
                 }""")
+
+                # Set dates last because the portal clears PD_EDATE when PD_SDATE changes.
+                _set_modal_dates(page, rec['date'])
                 validation_state = _modal_validation_state(page)
                 expected_fields = {
                     "issue": str(rec["issue_val"]),
