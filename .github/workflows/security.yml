@@ -60,7 +60,7 @@ jobs:
       - name: Build production image
         run: docker build --no-cache --tag tv-automation-test:ci .
       - name: Compile application inside image
-        run: docker run --rm --entrypoint python3 -e APP_ENV=test tv-automation-test:ci -m py_compile app.py
+        run: docker run --rm --entrypoint python3 -e APP_ENV=test -e PYTHONPYCACHEPREFIX=/tmp/pycache tv-automation-test:ci -m py_compile app.py
 
   dependency-audit:
     name: Python dependency audit

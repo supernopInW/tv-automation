@@ -365,3 +365,9 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - Security Gate รอบ corrective พบว่า Playwright base image มี UID 1000 อยู่แล้ว ทำให้ `useradd --uid 1000 appuser` ล้มด้วย exit code 4 แม้ dependency installation จะผ่าน.
 - แก้ Dockerfile ให้สร้าง dedicated system group/user `appuser` โดยไม่บังคับ UID และสร้าง upload directory ด้วย `install -d -o appuser -g appuser -m 700`; แก้ Compose ให้ใช้ `user: "appuser:appuser"` แทน numeric UID เพื่อให้ชื่อผู้ใช้และ ownership ตรงกันใน base image.
 - Security checker ยังผ่าน 14/14 checks; ต้อง build image จริงใน GitHub Actions หลัง push patch นี้. ห้ามสรุปว่า Docker production image ผ่านจาก local sandbox เพราะ sandbox ไม่มี Docker daemon.
+
+
+## 27. Docker Compile Validation Permission Fix (2026-08-16)
+
+- Security Gate รอบล่าสุด build production image ผ่านแล้ว แต่ขั้น `python3 -m py_compile app.py` ล้มเพราะ `appuser` ไม่มีสิทธิ์เขียน `__pycache__` ใต้ `/code` ซึ่งเป็นพฤติกรรมที่ถูกต้องของ non-root image.
+- ปรับ CI ให้ตั้ง `PYTHONPYCACHEPREFIX=/tmp/pycache` ระหว่าง compile ภายใน container เพื่อคง non-root permission boundary และยังตรวจ syntax ของ app.py ได้จริง. ห้ามแก้ด้วยการเปิด write permission กว้างให้ `/code`.
