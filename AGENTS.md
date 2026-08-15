@@ -233,3 +233,11 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - ปรับการปิด browser ให้เกิดขณะ `sync_playwright()` context ยังทำงานอยู่ และไม่เรียก `browser.close()` ซ้ำหลัง context หยุดแล้ว เพื่อตัดข้อความ `Event loop is closed! Is Playwright already stopped?`.
 - ปรับ SSE lifecycle ไม่เขียนทับ `_run_active` จาก generator ที่ disconnect; worker ยังคงเป็นเจ้าของการปล่อย lock.
 - เพิ่ม `test_selector2_readiness.py`; targeted tests 3 กรณี, hardening tests 4 กรณี, `py_compile` และ `git diff --check` ผ่านทั้งหมดแบบ offline โดยไม่เปิด browser และไม่ส่งข้อมูลไป T&V.
+
+
+## 14. แก้ Dynamic Month Readiness รอบสอง (2026-08-15)
+
+- จาก retry จริงพบว่า `#PL_MOUNT` เริ่มต้นด้วย option เดียวคือ `เลือกเดือน` ก่อนปีงบประมาณถูกเลือก ดังนั้นการกำหนดให้ทุก control ต้องมี options มากกว่า 1 ทำให้ readiness เข้มเกินไปและหยุดก่อนเลือกปี.
+- ปรับ readiness initial ให้ยอมรับ `#PL_MOUNT` ที่มีอย่างน้อย 1 option แต่ยังตรวจ `#PL_YAER` และ `#PL_TAMBONN` ตามจำนวนขั้นต่ำที่ใช้งานได้จริง.
+- เพิ่ม `_wait_for_select_options()` ใน `app.py` และ `automate_submission.py` เพื่อรอ `#PL_MOUNT` เติม options อย่างน้อย 2 รายการหลังเลือกปี ก่อนเลือกเดือนตามชื่อ.
+- เพิ่ม assertions สำหรับ initial placeholder และ dynamic month wait ใน `test_selector2_readiness.py`; targeted tests 5 กรณี, hardening tests 4 กรณี, `py_compile` และ `git diff --check` ผ่านแบบ offline.

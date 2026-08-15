@@ -40,9 +40,9 @@ def _page_diagnostics(page):
                 title: document.title,
                 bodyText: (document.body?.innerText || '').slice(-2000),
                 loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
-                workflowReady: ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'].every((selector) =>
-                    workflowControls[selector]?.present && workflowControls[selector].optionCount > 1
-                ),
+                workflowReady: workflowControls['#PL_YAER']?.present && workflowControls['#PL_YAER'].optionCount > 1 &&
+                    workflowControls['#PL_MOUNT']?.present && workflowControls['#PL_MOUNT'].optionCount >= 1 &&
+                    workflowControls['#PL_TAMBONN']?.present && workflowControls['#PL_TAMBONN'].optionCount > 1,
                 workflowControls
             };
         }""")
@@ -57,17 +57,36 @@ def _assert_authenticated(page):
 
 
 def _wait_for_portal_ready(page, stage):
-    """Wait for populated native Select2 backing selects, not raw visibility."""
+    """Wait for initial Select2 controls without requiring month options yet."""
     try:
         page.wait_for_function("""() => {
-            const required = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'];
-            return required.every((selector) => {
+            const minimums = {
+                '#PL_YAER': 2,
+                '#PL_MOUNT': 1,
+                '#PL_TAMBONN': 2
+            };
+            return Object.entries(minimums).every(([selector, minimum]) => {
                 const el = document.querySelector(selector);
-                return el && el.options && el.options.length > 1;
+                return el && el.options && el.options.length >= minimum;
             });
         }""", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
     except Exception as exc:
         raise RuntimeError(f"WORKFLOW_SELECTOR_ERROR at {stage}: {_page_diagnostics(page)}") from exc
+
+
+def _wait_for_select_options(page, selector, minimum, stage):
+    """Wait for a dynamic Select2 backing select to receive enough options."""
+    try:
+        page.wait_for_function(
+            """({selector, minimum}) => {
+                const el = document.querySelector(selector);
+                return Boolean(el && el.options && el.options.length >= minimum);
+            }""",
+            {"selector": selector, "minimum": int(minimum)},
+            timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"WORKFLOW_DYNAMIC_OPTION_ERROR at {stage}: {_page_diagnostics(page)}") from exc
 
 
 def _modal_validation_state(page):
@@ -490,7 +509,7 @@ def main():
         # 1. Fill Main Page Header Fields using JS to bypass Select2 hiding
         print(f"Selecting Year {year_num}...")
         select_by_value_js(page, 'select#PL_YAER', str(year_num))
-        time.sleep(1.5)
+        _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
         
         print(f"Selecting Month from sheet (value={portal_month_val})...")
         select_by_value_js(page, 'select#PL_MOUNT', str(portal_month_val))

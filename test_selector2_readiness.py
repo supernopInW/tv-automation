@@ -14,20 +14,31 @@ class FakePage:
     def __init__(self):
         self.calls = []
 
-    def wait_for_function(self, script, timeout=None):
-        self.calls.append((script, timeout))
+    def wait_for_function(self, script, *args, **kwargs):
+        self.calls.append((script, args, kwargs))
 
 
-def test_wait_for_portal_ready_uses_populated_options():
+def test_wait_for_portal_ready_accepts_initial_month_placeholder():
     page = FakePage()
     app._wait_for_portal_ready(page, "offline-test")
     assert len(page.calls) == 1
-    script, timeout = page.calls[0]
+    script, args, kwargs = page.calls[0]
     assert "#PL_YAER" in script
     assert "#PL_MOUNT" in script
     assert "#PL_TAMBONN" in script
-    assert "options.length > 1" in script
-    assert timeout == app.PLAYWRIGHT_NAVIGATION_TIMEOUT_MS
+    assert "'#PL_MOUNT': 1" in script
+    assert "options.length >= minimum" in script
+    assert kwargs["timeout"] == app.PLAYWRIGHT_NAVIGATION_TIMEOUT_MS
+
+
+def test_wait_for_select_options_waits_for_dynamic_month():
+    page = FakePage()
+    app._wait_for_select_options(page, "select#PL_MOUNT", 2, "after-year")
+    assert len(page.calls) == 1
+    script, args, kwargs = page.calls[0]
+    assert "options.length >= minimum" in script
+    assert args[0] == {"selector": "select#PL_MOUNT", "minimum": 2}
+    assert kwargs["timeout"] == app.PLAYWRIGHT_ACTION_TIMEOUT_MS
 
 
 def test_source_does_not_wait_for_hidden_select_visibility():
@@ -46,7 +57,8 @@ def test_cleanup_is_not_after_context_teardown():
 
 if __name__ == "__main__":
     tests = [
-        test_wait_for_portal_ready_uses_populated_options,
+        test_wait_for_portal_ready_accepts_initial_month_placeholder,
+        test_wait_for_select_options_waits_for_dynamic_month,
         test_source_does_not_wait_for_hidden_select_visibility,
         test_cleanup_is_not_after_context_teardown,
     ]
