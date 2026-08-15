@@ -3073,6 +3073,7 @@ function executeAutomation() {
     const startBtn = document.getElementById('start-btn');
     const logStatus = document.getElementById('log-status');
     const errorContainer = document.getElementById('error-container');
+    let completionConfirmed = false;
 
     errorContainer.style.display = 'none';
     startBtn.disabled = true;
@@ -3149,8 +3150,14 @@ function executeAutomation() {
             reader.read().then(({ done, value }) => {
                 if (done) {
                     startBtn.disabled = false;
-                    logStatus.textContent = 'FINISHED';
-                    logStatus.style.color = 'var(--success)';
+                    if (completionConfirmed) {
+                        logStatus.textContent = 'FINISHED';
+                        logStatus.style.color = 'var(--success)';
+                    } else {
+                        logStatus.textContent = 'UNKNOWN';
+                        logStatus.style.color = 'var(--warning)';
+                        addLog('warning', 'การเชื่อมต่อจบลงโดยไม่มีสัญญาณยืนยันผลลัพธ์จากเซิร์ฟเวอร์ กรุณาตรวจสอบพอร์ทัลก่อนเริ่มใหม่');
+                    }
                     return;
                 }
                 buffer += decoder.decode(value, { stream: true });
@@ -3160,6 +3167,7 @@ function executeAutomation() {
                     if (line.startsWith('data: ')) {
                         try {
                             const data = JSON.parse(line.slice(6));
+                            if (data.type === 'done') completionConfirmed = true;
                             handleSSEMessage(data, payload.records.length, uiIndexMap);
                         } catch (e) {
                             console.error(e);
@@ -3186,6 +3194,9 @@ function handleSSEMessage(data, totalCount, uiIndexMap = null) {
         addLog('error', data.message);
     } else if (data.type === 'done') {
         addLog('success', data.message);
+    } else if (data.type === 'diagnostics') {
+        const details = data.details || {};
+        addLog('warning', `Diagnostics แถว ${data.index ?? '-'}: ${details.url || details.diagnostics_error || 'ไม่พบรายละเอียด'}`);
     } else if (data.type === 'row_status') {
         const payloadIdx = data.index;
         const idx = Array.isArray(uiIndexMap) && uiIndexMap[payloadIdx] != null

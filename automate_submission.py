@@ -5,6 +5,65 @@ import pandas as pd
 import re
 from playwright.sync_api import sync_playwright
 
+PORTAL_LOGIN_URL = "https://tandv.doae.go.th/index/login_tv_system.php"
+PORTAL_WORKFLOW_26_URL = "https://tandv.doae.go.th/workflow/workflow_start.php?W=26"
+PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 30_000
+PLAYWRIGHT_ACTION_TIMEOUT_MS = 15_000
+PLAYWRIGHT_RESULT_TIMEOUT_MS = 25_000
+
+
+def _page_diagnostics(page):
+    try:
+        return page.evaluate("""() => ({
+            url: window.location.href,
+            title: document.title,
+            bodyText: (document.body?.innerText || '').slice(-2000),
+            loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
+            workflowReady: Boolean(document.querySelector('select#PL_YAER'))
+        })""")
+    except Exception as exc:
+        return {"diagnostics_error": str(exc)}
+
+
+def _assert_authenticated(page):
+    state = _page_diagnostics(page)
+    if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
+        raise RuntimeError(f"AUTHENTICATION_ERROR: {state}")
+
+
+def _modal_validation_state(page):
+    return page.evaluate("""() => {
+        const modal = document.querySelector('#bizModal_402');
+        if (!modal) return {modal: 'missing'};
+        return {
+            invalid: Array.from(modal.querySelectorAll(':invalid')).map((el) => ({
+                id: el.id, name: el.name, value: el.value, message: el.validationMessage
+            })),
+            startDate: modal.querySelector('#PD_SDATE')?.value || '',
+            endDate: modal.querySelector('#PD_EDATE')?.value || '',
+            issue: modal.querySelector('#PD_ISSUES')?.value || '',
+            activity: modal.querySelector('#PD_ACTIVITY')?.value || '',
+            other: modal.querySelector('#PD_OTHER')?.value || '',
+            detail: modal.querySelector('#PD_DETAIL')?.value || '',
+            place: modal.querySelector('#PD_PLACE')?.value || '',
+            target: modal.querySelector('#PD_TARGET')?.value || ''
+        };
+    }""")
+
+
+def _verify_finalize_result(page, before_url):
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=PLAYWRIGHT_RESULT_TIMEOUT_MS)
+    except Exception:
+        pass
+    page.wait_for_timeout(1_000)
+    state = _page_diagnostics(page)
+    text = str(state.get("bodyText", "")).lower()
+    markers = ("บันทึกข้อมูลเรียบร้อย", "บันทึกเรียบร้อย", "ส่งข้อมูลเรียบร้อย", "success", "saved", "completed")
+    return {"confirmed": any(marker in text for marker in markers) or (
+        state.get("url") != before_url and not state.get("loginVisible")
+    ), "state": state}
+
 # Normalized mapping function
 def map_activity(activity_name, tool_name):
     act = activity_name.strip()
@@ -99,26 +158,45 @@ def clean_excel_val(val):
     return val_str
 
 # JS Dropdown helpers to bypass Select2 visibility issues
+def _select_portal_option(page, selector, *, value=None, label=None):
+    result = page.evaluate(
+        """({selector, value, label}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const wantedValue = String(value || '').trim();
+            const wantedLabel = String(label || '').trim();
+            const option = Array.from(select.options).find((item) =>
+                (wantedValue && item.value === wantedValue) ||
+                (wantedLabel && item.text.trim() === wantedLabel)
+            );
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                options: Array.from(select.options).map((item) => ({value: item.value, text: item.text.trim()}))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            select.dispatchEvent(new Event('change', {bubbles: true}));
+            if (window.jQuery) window.jQuery(select).val(option.value).trigger('change');
+            return {found: true, value: select.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "value": value, "label": label},
+    )
+    if not result.get("found"):
+        raise RuntimeError(f"PORTAL_OPTION_ERROR for {selector}: {result}")
+    page.wait_for_timeout(300)
+    actual = page.locator(selector).input_value()
+    if actual != result.get("value"):
+        raise RuntimeError(f"PORTAL_OPTION_NOT_PERSISTED for {selector}: expected={result.get('value')!r}, got={actual!r}")
+
+
 def select_by_value_js(page, selector, value):
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('{selector}');
-        if (select) {{
-            select.value = '{value}';
-            select.dispatchEvent(new Event('change'));
-        }}
-    }}""")
+    _select_portal_option(page, selector, value=str(value or "").strip())
+
 
 def select_by_label_js(page, selector, label):
-    page.evaluate(f"""() => {{
-        const select = document.querySelector('{selector}');
-        if (select) {{
-            const option = Array.from(select.options).find(o => o.text.trim() === '{label}');
-            if (option) {{
-                select.value = option.value;
-                select.dispatchEvent(new Event('change'));
-            }}
-        }}
-    }}""")
+    _select_portal_option(page, selector, label=str(label or "").strip())
+
 
 def _select_modal_option(page, selector, value, label=""):
     """Select a dynamic portal option and verify that it remains selected."""
@@ -352,19 +430,25 @@ def main():
         browser = p.chromium.launch(headless=False)
         context = browser.new_context()
         page = context.new_page()
+        page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
         
         print("Logging in to T&V portal...")
-        page.goto("https://tandv.doae.go.th/index/login_tv_system.php")
-        page.wait_for_load_state("networkidle")
+        page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+        page.wait_for_selector('input[name="USER_NAME"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        page.wait_for_selector('input[name="USER_PASSWORD"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
         page.fill('input[name="USER_NAME"]', username)
         page.fill('input[name="USER_PASSWORD"]', password)
-        page.click('#login_submit')
-        time.sleep(5)
+        page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        page.wait_for_timeout(2_000)
+        _assert_authenticated(page)
         
         print("Navigating to Workflow 26 plan form...")
-        page.goto("https://tandv.doae.go.th/workflow/workflow_start.php?W=26")
-        page.wait_for_load_state("networkidle")
-        time.sleep(3)
+        page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+        _assert_authenticated(page)
+        page.wait_for_selector('select#PL_YAER', state='visible', timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+        page.wait_for_selector('select#PL_MOUNT', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        page.wait_for_selector('select#PL_TAMBONN', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
         
         # 1. Fill Main Page Header Fields using JS to bypass Select2 hiding
         print(f"Selecting Year {year_num}...")
@@ -385,9 +469,9 @@ def main():
                 print(f"\n[{i+1}/{len(records)}] Adding Record (Row {rec['row_num']}): {rec['activity']}")
                 
                 # Click Add Data button to open modal
-                page.click('a:has-text("เพิ่มข้อมูล")')
-                page.wait_for_selector('#bizModal_402', state='visible')
-                time.sleep(1.0) # Wait brief moment for modal content to settle
+                page.locator('a:has-text("เพิ่มข้อมูล")').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                page.wait_for_selector('#bizModal_402', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                page.wait_for_timeout(500)
                 
                 # Fill modal fields (these are standard selects and inputs, no Select2 wrapper)
                 modal = page.locator('#bizModal_402')
@@ -405,12 +489,14 @@ def main():
                 )
                 
                 if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
-                    other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30]
+                    other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30].strip()
                     print(f"  Filling Other Activity Text: {other_val}")
-                    try:
-                        modal.locator('input#PD_OTHER').fill(other_val)
-                    except Exception:
-                        pass
+                    other_input = modal.locator('input#PD_OTHER')
+                    if other_input.count() != 1:
+                        raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER is required for activity 999")
+                    other_input.fill(other_val)
+                    if not other_input.input_value().strip():
+                        raise RuntimeError("MODAL_VALIDATION_ERROR: PD_OTHER remained empty for activity 999")
                     
                 print(f"  Filling Date: {rec['date']}")
                 _set_modal_dates(page, rec['date'])
@@ -445,52 +531,47 @@ def main():
                         btn.classList.remove('disabled');
                     }
                 }""")
-                time.sleep(0.3)
-                
+                validation_state = _modal_validation_state(page)
+                expected_fields = {
+                    "issue": str(rec["issue_val"]),
+                    "activity": str(rec["activity_val"]),
+                    "startDate": str(rec["date"]),
+                    "endDate": str(rec["date"]),
+                    "detail": str(rec["activity"]),
+                    "place": str(rec["location"]),
+                    "target": str(rec["target_num"]),
+                }
+                for field, expected in expected_fields.items():
+                    actual = str(validation_state.get(field) or "")
+                    if expected and actual != expected:
+                        raise RuntimeError(f"MODAL_FIELD_MISMATCH: {field} expected={expected!r}, actual={actual!r}")
+                if validation_state.get("invalid"):
+                    raise RuntimeError(f"MODAL_VALIDATION_ERROR before save: {validation_state}")
+
                 try:
-                    modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=5000)
-                except Exception:
-                    page.evaluate("""() => {
+                    modal.locator('button[type="submit"]:has-text("บันทึก")').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                except Exception as click_exc:
+                    fallback_result = page.evaluate("""() => {
                         const modalEl = document.querySelector('#bizModal_402');
-                        if (!modalEl) return;
+                        if (!modalEl) return {clicked: false, reason: 'modal-not-found'};
                         const btn = Array.from(modalEl.querySelectorAll('button, input[type="submit"]'))
                             .find(b => (b.textContent || '').includes('บันทึก') || (b.value || '').includes('บันทึก'))
                             || modalEl.querySelector('button[type="submit"]')
                             || modalEl.querySelector('button.btn-primary');
-                        if (btn) {
-                            btn.removeAttribute('disabled');
-                            btn.disabled = false;
-                            btn.click();
-                        } else {
-                            const form = modalEl.querySelector('form');
-                            if (form) form.submit();
-                        }
+                        if (!btn) return {clicked: false, reason: 'save-button-not-found'};
+                        btn.removeAttribute('disabled');
+                        btn.disabled = false;
+                        btn.classList.remove('disabled');
+                        btn.click();
+                        return {clicked: true};
                     }""")
-                
+                    if not fallback_result.get("clicked"):
+                        raise RuntimeError(f"MODAL_SAVE_CONTROL_ERROR: {fallback_result}") from click_exc
                 try:
-                    page.wait_for_selector('#bizModal_402', state='hidden', timeout=15000)
+                    page.wait_for_selector('#bizModal_402', state='hidden', timeout=PLAYWRIGHT_RESULT_TIMEOUT_MS)
                 except Exception as exc:
-                    validation_state = page.evaluate("""() => {
-                        const modal = document.querySelector('#bizModal_402');
-                        if (!modal) return {modal: 'missing'};
-                        const invalid = Array.from(modal.querySelectorAll(':invalid')).map((el) => ({
-                            id: el.id,
-                            name: el.name,
-                            value: el.value,
-                            message: el.validationMessage
-                        }));
-                        return {
-                            invalid,
-                            startDate: modal.querySelector('#PD_SDATE')?.value || '',
-                            endDate: modal.querySelector('#PD_EDATE')?.value || '',
-                            issue: modal.querySelector('#PD_ISSUES')?.value || '',
-                            activity: modal.querySelector('#PD_ACTIVITY')?.value || ''
-                        };
-                    }""")
-                    raise RuntimeError(
-                        f"Portal modal stayed open after save: {validation_state}"
-                    ) from exc
-                time.sleep(1.0)
+                    raise RuntimeError(f"MODAL_SAVE_UNCONFIRMED: {_modal_validation_state(page)}") from exc
+                page.wait_for_timeout(500)
             except Exception as e:
                 print(f"Error occurred at row {rec['row_num']}: {e}")
                 err_img = r"C:\Users\Admin\.gemini\antigravity\brain\32c4dba2-5165-43af-a43d-2d70e1a32c50\scratch\modal_error.png"
@@ -506,48 +587,37 @@ def main():
                     pass
                 raise e
             
-        # 3. Select Approver
-        print("\nSelecting Approver นางอรอนงค์ สูญกลาง...")
-        select_by_label_js(page, 'select#USR_APPROVERS', 'นางอรอนงค์ สูญกลาง')
-        time.sleep(1.0)
+        # 3. Select Approver and verify the value persisted
+        approver_name = 'นางอรอนงค์ สูญกลาง'
+        print(f"\nSelecting Approver {approver_name}...")
+        select_by_label_js(page, 'select#USR_APPROVERS', approver_name)
+        print("Approver selection verified.")
         
         # 4. Final Submission or Pause
-        if args.submit:
-            print("\n*** SUBMITTING PLANS TO PORTAL (บันทึกและส่งข้อมูล) ***")
-            page.click('#wf-btn-save')
-            try:
-                page.wait_for_selector('button.confirm', state='visible', timeout=3000)
-                print("Confirming submission...")
-                page.click('button.confirm')
-                time.sleep(1.0)
-            except Exception:
-                pass
-            # Force native submit to bypass JQuery submit bugs
-            page.evaluate("""() => {
-                const form = document.querySelector('#form_wf') || document.querySelector('form');
-                if (form) form.submit();
-            }""")
-            print("Form submitted. Waiting 5 seconds for redirection...")
-            time.sleep(5)
-            print("Submission complete!")
-        elif args.draft:
-            print("\n*** SAVING PLANS AS DRAFT (บันทึกชั่วคราว) ***")
-            page.click('#wf-btn-temp-save')
+        if args.submit or args.draft:
+            is_submit = bool(args.submit)
+            button_selector = '#wf-btn-save' if is_submit else '#wf-btn-temp-save'
+            action_label = 'Submission' if is_submit else 'Draft save'
+            print(f"\n*** {action_label.upper()} ***")
+            before_url = page.url
+            page.locator(button_selector).click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
             try:
                 print("Waiting for confirmation dialog...")
-                page.wait_for_selector('button.confirm', state='visible', timeout=5000)
-                page.click('button.confirm')
-                time.sleep(1.0)
-            except Exception:
-                pass
-            # Force native submit to bypass JQuery submit bugs
-            page.evaluate("""() => {
-                const form = document.querySelector('#form_wf') || document.querySelector('form');
-                if (form) form.submit();
-            }""")
-            print("Draft saved. Waiting 5 seconds for redirection...")
-            time.sleep(5)
-            print("Draft save complete!")
+                page.wait_for_selector('button.confirm', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                page.locator('button.confirm').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+            except Exception as exc:
+                result = _verify_finalize_result(page, before_url)
+                if not result.get("confirmed"):
+                    raise RuntimeError(
+                        f"FINALIZE_CONFIRMATION_ERROR: {action_label} not confirmed: {result.get('state')}"
+                    ) from exc
+            result = _verify_finalize_result(page, before_url)
+            if not result.get("confirmed"):
+                raise RuntimeError(
+                    f"FINALIZE_UNKNOWN_RESULT: {action_label} may or may not have been processed; "
+                    "do not retry without checking the portal"
+                )
+            print(f"{action_label} confirmed by portal.")
         else:
             print("\n================ DRY-RUN VERIFICATION ================")
             print("All fields have been filled out successfully.")

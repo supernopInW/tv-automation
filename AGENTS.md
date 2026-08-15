@@ -216,3 +216,11 @@ python app.py
 - Updated `app.py` and `automate_submission.py` so Workflow 26 waits for dynamic activity options, verifies the selected activity, re-applies both start/end dates until they persist, and reports invalid portal fields when `#bizModal_402` remains visible after save.
 - Business rule: each plan record is a single-day activity, so `PD_EDATE` must always equal `PD_SDATE`; both automation paths enforce and verify this.
 - Clarified auto-plan requirement: the current uploaded Excel must not be the primary activity source. Random fieldwork activities should be sampled from historical Excel activity records (using the historical pool as a reference), with the built-in pool only as fallback when no historical records are available.
+
+## 12. บันทึกการ Hardening Playwright Workflow 26 (2026-08-15)
+- ปรับ pp.py และ utomate_submission.py ให้ตรวจ login/session, Workflow 26 selectors, dynamic dropdown และค่าที่เลือกคงอยู่จริงก่อนกรอกข้อมูล
+- เพิ่มการตรวจ modal fields, PD_OTHER สำหรับกิจกรรม 999, validation state และป้องกันการใช้ native form.submit ที่ทำให้ผลลัพธ์ไม่ชัดเจน
+- ปรับ Draft/Submit ให้ตรวจผลลัพธ์จาก URL/ข้อความของพอร์ทัล และรายงาน FINALIZE_UNKNOWN_RESULT เมื่อยังยืนยันไม่ได้ ห้าม retry โดยไม่ตรวจพอร์ทัลก่อน
+- เพิ่ม diagnostics และ absolute screenshot path เมื่อแถวผิด รวมถึงปรับ worker ให้เป็นผู้ถือครองและปล่อย _run_lock หลัง Playwright จบจริง
+- เพิ่ม 	est_workflow26_hardening.py สำหรับทดสอบ offline; ผ่าน 4 กรณี และผ่าน py_compile/
+ode --check โดยยังไม่ส่งข้อมูลไปพอร์ทัลจริง
