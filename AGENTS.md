@@ -1,6 +1,6 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
-> **Last Updated:** 2026-08-13
+> **Last Updated:** 2026-08-15
 > **Version:** 1.0.0
 
 ---
@@ -224,3 +224,12 @@ python app.py
 - เพิ่ม diagnostics และ absolute screenshot path เมื่อแถวผิด รวมถึงปรับ worker ให้เป็นผู้ถือครองและปล่อย _run_lock หลัง Playwright จบจริง
 - เพิ่ม 	est_workflow26_hardening.py สำหรับทดสอบ offline; ผ่าน 4 กรณี และผ่าน py_compile/
 ode --check โดยยังไม่ส่งข้อมูลไปพอร์ทัลจริง
+
+
+## 13. บันทึกการแก้ Select2 Readiness และ Browser Lifecycle (2026-08-15)
+
+- พบว่า `select#PL_YAER` และ `select#PL_MOUNT` ถูกห่อด้วย Select2 และ raw select ถูกซ่อนตามปกติ ส่วน `select#PL_TAMBONN` มีขนาด 0x0 แม้ตัวควบคุมบนหน้าจอพร้อมใช้งาน การรอด้วย `state="visible"` จึงทำให้ Dry Run หยุดด้วย `WORKFLOW_SELECTOR_ERROR` ก่อนเปิด modal.
+- ปรับ `app.py` และ `automate_submission.py` ให้รอ raw select ที่ attach และมี options มากกว่า 1 แทนการบังคับ visibility รวมถึงเพิ่ม diagnostics ของ option count, value, display, visibility และ aria-hidden.
+- ปรับการปิด browser ให้เกิดขณะ `sync_playwright()` context ยังทำงานอยู่ และไม่เรียก `browser.close()` ซ้ำหลัง context หยุดแล้ว เพื่อตัดข้อความ `Event loop is closed! Is Playwright already stopped?`.
+- ปรับ SSE lifecycle ไม่เขียนทับ `_run_active` จาก generator ที่ disconnect; worker ยังคงเป็นเจ้าของการปล่อย lock.
+- เพิ่ม `test_selector2_readiness.py`; targeted tests 3 กรณี, hardening tests 4 กรณี, `py_compile` และ `git diff --check` ผ่านทั้งหมดแบบ offline โดยไม่เปิด browser และไม่ส่งข้อมูลไป T&V.
