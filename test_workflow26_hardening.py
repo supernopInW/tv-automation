@@ -62,6 +62,24 @@ def test_diagnostics_never_include_password():
     assert "password" not in json.dumps(result, ensure_ascii=False).lower()
 
 
+def test_modal_dynamic_selects_are_reapplied_after_generic_events():
+    app_source = Path("app.py").read_text(encoding="utf-8")
+    cli_source = Path("automate_submission.py").read_text(encoding="utf-8")
+    for source, generic_marker, date_marker in (
+        (app_source, "# Trigger events on all inputs", "_set_modal_dates(page, be_date)"),
+        (cli_source, "# Trigger input events", "_set_modal_dates(page, rec['date'])"),
+    ):
+        generic_pos = source.index(generic_marker)
+        final_select_pos = source.index("_set_modal_select_value", generic_pos)
+        date_pos = source.index(date_marker)
+        assert generic_pos < final_select_pos < date_pos
+        helper_start = source.index("def _set_modal_select_value")
+        helper_end = source.index("def _set_modal_dates", helper_start)
+        helper_source = source[helper_start:helper_end]
+        assert "new Event('input'" in helper_source
+        assert "new Event('change'" not in helper_source
+
+
 def test_modal_dates_are_set_after_generic_events_in_both_paths():
     app_source = Path("app.py").read_text(encoding="utf-8")
     cli_source = Path("automate_submission.py").read_text(encoding="utf-8")
@@ -75,6 +93,7 @@ if __name__ == "__main__":
         test_finalize_confirmed_by_portal_marker,
         test_run_rejects_missing_credentials_without_starting_browser,
         test_diagnostics_never_include_password,
+        test_modal_dynamic_selects_are_reapplied_after_generic_events,
         test_modal_dates_are_set_after_generic_events_in_both_paths,
     ]
     for test in tests:

@@ -256,3 +256,19 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - ตรวจ DOM จริงในพอร์ทัลพบว่า `#PD_SDATE` และ `#PD_EDATE` เป็น input `type="text"` ที่เริ่มต้น disabled และมี datepicker/inputmask. Event handler `change` ของ `#PD_SDATE` จะเปิดใช้งานและล้างค่า `#PD_EDATE` เพื่อรอช่วงวันที่.
 - สาเหตุคือโค้ดตั้งวันที่ทั้งคู่ก่อน generic event dispatch แต่ generic dispatch ส่ง `change` ซ้ำให้ `#PD_SDATE` หลังจากนั้น จึงล้าง `#PD_EDATE` อีกครั้ง. แก้ทั้ง `app.py` และ `automate_submission.py` ให้ `_set_modal_dates()` ทำงานหลัง generic events เป็นขั้นตอนสุดท้ายก่อน validation.
 - เพิ่ม regression assertion ใน `test_workflow26_hardening.py` ตรวจลำดับดังกล่าวทั้ง backend และ CLI. ผลทดสอบรอบนี้ผ่าน Select2 tests 4 กรณี, hardening tests 5 กรณี, `py_compile` และ `git diff --check` แบบ offline. ยังไม่ได้ Draft/Submit.
+
+
+## 17. แก้ Modal Dynamic Activity Event Ordering รอบถัดไป (2026-08-15)
+
+- Retry บน Render หลัง date fix ยืนยันว่า `PD_EDATE` ผ่านแล้ว แต่ validation พบ `MODAL_FIELD_MISMATCH` ที่ `activity` ครบหลายแถว โดย `#PD_ACTIVITY` กลับเป็นค่าว่าง.
+- Controlled test บน modal จริงของพอร์ทัลพบว่า `#PD_ACTIVITY` มี inline handler `bsf_change_objF_398(this.value);` และเมื่อเลือกกิจกรรมแล้วระบบจะ rebuild option list แบบ asynchronous. การ dispatch `input/change/keyup/blur` ให้ทุก field ภายหลังจึงทำให้ dynamic activity ถูกล้างกลับเป็น placeholder.
+- ทดสอบซ้ำบน modal จริงโดยไม่บันทึกข้อมูล: หลัง generic events ค่า `#PD_ACTIVITY` ว่าง แต่การกำหนด `select.value` และส่งเฉพาะ `input` event หลัง handler settle แล้ว คงค่า `19` (วิสาหกิจชุมชน) ได้อย่างน้อย 1 วินาที.
+- แก้ทั้ง `app.py` และ `automate_submission.py` เพิ่ม `_set_modal_select_value()` ซึ่งตั้งค่า dynamic select ครั้งสุดท้ายโดยไม่ยิง destructive `change` event. หลัง generic events ให้รอ handler 1 วินาที แล้ว re-apply `#PD_ISSUES` และ `#PD_ACTIVITY`; สำหรับกิจกรรม `999` ให้เติม `#PD_OTHER` ซ้ำก่อนตั้งวันที่และ validation.
+- เพิ่ม regression test ตรวจว่า final select setter อยู่หลัง generic event block และก่อน `_set_modal_dates()` พร้อมยืนยัน helper ไม่ dispatch `change`. Offline hardening tests ผ่าน 6 กรณี, Select2 tests ผ่าน 4 กรณี, `py_compile` และ `git diff --check` ผ่านแล้ว. ยังไม่ได้ commit/deploy patch และยังไม่มี Draft/Submit.
+
+## 18. สถานะ retry รอบ Dynamic Activity Fix
+
+- Retry ที่กำลังตรวจบน Render เป็น deployment date fix เดิม (`3736c22`) และพบ `activity` ว่างหลังผ่าน dynamic month; ห้ามนำผลรอบนี้ไปสรุปว่า patch section 17 ใช้งานแล้วจนกว่าจะ commit, deploy และ retry ใหม่.
+- ยังคงห้ามกด `บันทึกชั่วคราว` หรือ `บันทึกและส่งข้อมูล` ระหว่างการทดสอบทุกกรณี.
+
+---
