@@ -162,8 +162,15 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert "localStorage.getItem('tv_username'" not in source
     assert "sessionStorage.setItem('tv_password'" not in source
     assert "sessionStorage.getItem('tv_password'" not in source
-    assert "localStorage.setItem('gemini_api_key'" not in source
-    assert "localStorage.getItem('gemini_api_key'" not in source
+    with open('templates/index.html', encoding='utf-8') as handle:
+        template_source = handle.read()
+    with open('requirements.txt', encoding='utf-8') as handle:
+        requirements_source = handle.read()
+    assert 'gemini' not in source.lower()
+    assert 'X-Gemini-API-Key' not in source
+    assert 'gemini' not in backend_source.lower()
+    assert 'google-genai' not in requirements_source.lower()
+    assert 'gemini' not in template_source.lower()
     assert '/static/${shot_name}' not in backend_source
     assert 'screenshot(path=' not in backend_source
     assert 'screenshot(path=' not in cli_source

@@ -106,8 +106,7 @@
           "นำเข้าข้อมูลแผนเยี่ยมเยียนจาก Excel อัตโนมัติ",
           "รองรับทุกจังหวัด อำเภอ ตำบล ทั่วประเทศไทย",
           "Playwright Browser Automation (Workflow 26)",
-          "โหมด Dry-run / บันทึกชั่วคราว / บันทึกและส่ง",
-          "AI-Assisted Analysis ด้วย Gemini"
+          "โหมด Dry-run / บันทึกชั่วคราว / บันทึกและส่ง"
         ],
         "description": "ระบบนำเข้าข้อมูลและกรอกแผนปฏิบัติงานเยี่ยมเยียนรายเดือนอัตโนมัติ สำหรับเจ้าหน้าที่สำนักงานเกษตรอำเภอ กรมส่งเสริมการเกษตร",
         "softwareVersion": "3.0",
@@ -465,7 +464,7 @@
                 <label for="username">ชื่อผู้ใช้งาน (รหัสบัตรประชาชน)</label>
                 <input type="text" id="username" class="form-input" value="" placeholder="บัญชี T&V ของท่าน (เช่น เลขบัตรประชาชน)" autocomplete="username">
                 <span id="username-error" class="validation-msg"></span>
-                <span class="field-hint">ใช้บัญชีของท่านเอง — เก็บเฉพาะในเครื่อง (localStorage)</span>
+                <span class="field-hint">ใช้บัญชีของท่านเอง — เก็บเฉพาะในหน่วยความจำของแท็บระหว่างการทำงาน</span>
             </div>
             
             <div class="form-control-wrapper">
@@ -475,11 +474,6 @@
                 <span class="field-hint">แต่ละคนใช้บัญชีของตนเอง — ระบบไม่เก็บรหัสผ่านถาวร</span>
             </div>
 
-            <div class="form-control-wrapper">
-                <label for="gemini-api-key">Gemini API Key (สำหรับช่วยวิเคราะห์ตาราง)</label>
-                <input type="password" id="gemini-api-key" class="form-input" placeholder="AIzaSy...">
-            </div>
-            
             <div class="form-control-wrapper">
                 <label for="sheet-select">แผ่นงาน (เดือนแผนงาน)</label>
                 <select id="sheet-select" class="form-input" onchange="onSheetChange()">

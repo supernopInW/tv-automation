@@ -1,13 +1,8 @@
 import json
-import sys
-import types
 from pathlib import Path
 
-# app.py imports Google GenAI lazily for optional Excel classification. The
-# hardening tests do not call Gemini, so provide an offline import stub.
-sys.modules.setdefault("google", types.ModuleType("google"))
-sys.modules.setdefault("google.genai", types.ModuleType("google.genai"))
-sys.modules["google"].genai = sys.modules["google.genai"]
+# The application uses the deterministic local rules-based parser; no external
+# AI SDK stub is needed for these offline hardening tests.
 
 import app
 

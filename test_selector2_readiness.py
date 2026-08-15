@@ -1,11 +1,4 @@
 from pathlib import Path
-import sys
-import types
-
-# app.py imports Google GenAI, but this test exercises only Playwright helpers.
-sys.modules.setdefault("google", types.ModuleType("google"))
-sys.modules.setdefault("google.genai", types.ModuleType("google.genai"))
-sys.modules["google"].genai = sys.modules["google.genai"]
 
 import app
 

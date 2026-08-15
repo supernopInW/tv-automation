@@ -139,31 +139,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    const savedKey = localStorage.getItem('gemini_api_key') || '';
-    document.getElementById('gemini-api-key').value = savedKey;
-    document.getElementById('gemini-api-key').addEventListener('input', (e) => {
-        localStorage.setItem('gemini_api_key', e.target.value.trim());
-    });
-
     const savedApprover = localStorage.getItem('tv_approver') || '';
     if (savedApprover) document.getElementById('approver').value = savedApprover;
     document.getElementById('approver').addEventListener('input', (e) => {
         localStorage.setItem('tv_approver', e.target.value.trim());
     });
 
-    // Username: localStorage only (each person uses their own T&V account)
-    const savedUsername = localStorage.getItem('tv_username') || '';
-    if (savedUsername) document.getElementById('username').value = savedUsername;
-    document.getElementById('username').addEventListener('input', (e) => {
-        localStorage.setItem('tv_username', e.target.value.trim());
-    });
-
-    // Password: sessionStorage only — never localStorage, never hardcoded
-    const savedPassword = sessionStorage.getItem('tv_password') || '';
-    if (savedPassword) document.getElementById('password').value = savedPassword;
-    document.getElementById('password').addEventListener('input', (e) => {
-        sessionStorage.setItem('tv_password', e.target.value);
-    });
+    // T&V credentials are memory-only and are never persisted in Web Storage.
+    document.getElementById('username').value = '';
+    document.getElementById('password').value = '';
 
     const savedRole = localStorage.getItem('tv_role') || 'officer';
     document.getElementById('role-select').value = savedRole;
@@ -2191,7 +2175,6 @@ function onSheetChange() {
 function loadRecords(sheetName) {
     const rowCountEl = document.getElementById('row-count');
     rowCountEl.textContent = 'กำลังโหลดตาราง...';
-    const apiKey = localStorage.getItem('gemini_api_key') || '';
     const office = document.getElementById('office-name').value.trim();
     const tambon = document.getElementById('tambon').value.trim();
     const qs = new URLSearchParams({
@@ -2200,7 +2183,7 @@ function loadRecords(sheetName) {
         office_name: office,
         tambon: tambon
     });
-    fetch(`/api/records?${qs}`, { headers: { 'X-Gemini-API-Key': apiKey } })
+    fetch(`/api/records?${qs}`)
         .then(res => res.json())
         .then(async data => {
             if (data.success) {

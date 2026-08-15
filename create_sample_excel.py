@@ -87,7 +87,7 @@ cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 # ── Row 4: Sub-note ──
 ws.merge_cells("A4:M4")
 cell = ws["A4"]
-cell.value = "คอลัมน์ I-M (Override): I=issue_val, J=activity_val, K=other_text, L=location, M=target_num — ใช้เฉพาะ parser แบบ rules-based (ไม่มี Gemini API Key)"
+cell.value = "คอลัมน์ I-M (Override): I=issue_val, J=activity_val, K=other_text, L=location, M=target_num — ใช้ร่วมกับ parser แบบ rules-based"
 cell.font = FONT_NOTE
 cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 

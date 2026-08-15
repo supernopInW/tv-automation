@@ -34,11 +34,11 @@
 
 - **Backend:** Python 3.10+, Flask, Pandas, openpyxl, xlrd
 - **Automation Engine:** Playwright (Chromium Async/Sync API) สำหรับควบคุม Headless/Headed Browser ไปยังระบบ T&V
-- **AI Integration:** Google GenAI SDK (`google-genai`) สำหรับฟีเจอร์ช่วยวิเคราะห์/ประมวลผลข้อความจากแผน Excel
+- **Data Processing:** Local rules-based parser สำหรับอ่านและจำแนกข้อมูล Excel โดยไม่มีการเชื่อมต่อ external AI API
 - **Frontend:** Vanilla HTML5, CSS3 (Modern Responsive Dashboard, CSS Variables, Glassmorphism design), Vanilla JavaScript (`static/app.js`)
 - **Data Persistence & Cache:** 
   - ข้อมูลภูมิศาสตร์ (จังหวัด/อำเภอ/ตำบล/หมู่บ้าน) เก็บเป็น JSON ใน `data/` และ `config/districts.json`
-  - รหัสผ่าน T&V ของผู้ใช้ **ไม่เก็บในฐานข้อมูลหรือไฟล์** (เก็บเฉพาะใน `sessionStorage` บน Browser ของผู้ใช้ชั่วคราวเท่านั้น)
+  - T&V username/password ของผู้ใช้ **ไม่เก็บในฐานข้อมูล ไฟล์ หรือ Web Storage**; อยู่ในหน่วยความจำของแท็บ/การรันและล้างหลังจบงาน
 - **Tunneling & Deployment:** รองรับ Cloudflare Tunnel (`cloudflared.exe`) และ Ngrok (`ngrok.exe`) เพื่อรันเปิดให้เครื่องอื่นใช้งานผ่านลิงก์ได้
 
 ---
@@ -52,7 +52,7 @@ tv_automation/
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
 ├── geo_data.py                # ตัวจัดการข้อมูลภูมิศาสตร์ (จังหวัด, อำเภอ, ตำบล, หมู่บ้าน)
-├── requirements.txt           # Python Dependencies (Flask, Playwright, Pandas, google-genai ฯลฯ)
+├── requirements.txt           # Python Dependencies ของ Flask, Playwright, Pandas และ parser แบบ local
 ├── Dockerfile & .dockerignore # การ containerize สำหรับการ deploy (HF Spaces / VPS)
 ├── docker-compose.yml         # 🚀 การสั่งรันด้วย Docker Compose แบบ 1-Command
 ├── Upload_To_GitHub.bat       # 🐙 สคริปต์ทางลัดสำหรับ Push โค้ดลง GitHub (supernopInW/tv-automation)
@@ -328,3 +328,14 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - เพิ่ม regression assertions สำหรับการไม่อ่าน/เขียน T&V username/password และ Gemini key จาก Web Storage รวมถึงการไม่เขียน screenshot หรือ modal HTML ลงดิสก์.
 - เพิ่ม `node --check static/auth.js` ใน Security Gate. Local CI-equivalent checks, Python/JavaScript syntax, dependency audit (`pip-audit`) และ offline regression tests ผ่านแล้ว; Semgrep แบบ baseline ของ `main` ไม่พบ finding ใหม่ ขณะที่ full scan ยังรายงาน legacy `innerHTML` sinks เดิมตามที่ baseline rule ออกแบบไว้.
 - สถานะยังเป็น pre-PR: ต้อง stage ตรวจ diff/secret scan, commit, push branch, เปิด Pull Request และรอ Security Gate ก่อน merge หรือ deploy.
+
+
+## อัปเดต Security/Data Governance — 2026-08-15
+
+- ถอด Google GenAI/Gemini integration ออกจาก backend, frontend, requirements, template และ source tree สำรองทั้งหมด
+- `/api/records` ใช้ local deterministic rules-based parser เท่านั้น; ไม่อ่าน `X-Gemini-API-Key` และไม่ส่งข้อมูล Excel ไป external AI service
+- ลบ Gemini API key field และ Web Storage handling จาก frontend พร้อมปรับ USER_GUIDE/WORKFLOW ให้ระบุ local processing
+- เพิ่ม regression assertions ว่า runtime source ไม่มี Gemini/API-key integration และ dependency `google-genai` ไม่อยู่ใน requirements
+- ตรวจ syntax Python/JavaScript, regression 17 tests, credential cleanup และ `git diff --check` ผ่านหลังการเปลี่ยนแปลง
+- ห้ามนำข้อมูล Excel ที่มีข้อมูลส่วนบุคคลหรือข้อมูลภายในไปยังบริการ AI ภายนอกผ่านระบบนี้ เพราะระบบถูกออกแบบให้ไม่เชื่อมต่อ external AI แล้ว
+- หยุดการทำสไลด์ชั่วคราวตามคำขอ และให้การแก้โค้ด/validation เป็นงานหลักของรอบนี้

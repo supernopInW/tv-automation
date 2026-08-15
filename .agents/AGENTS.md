@@ -34,11 +34,11 @@
 
 - **Backend:** Python 3.10+, Flask, Pandas, openpyxl, xlrd
 - **Automation Engine:** Playwright (Chromium Async/Sync API) สำหรับควบคุม Headless/Headed Browser ไปยังระบบ T&V
-- **AI Integration:** Google GenAI SDK (`google-genai`) สำหรับฟีเจอร์ช่วยวิเคราะห์/ประมวลผลข้อความจากแผน Excel
+- **Data Processing:** Local rules-based parser สำหรับอ่านและจำแนกข้อมูล Excel โดยไม่มีการเชื่อมต่อ external AI API
 - **Frontend:** Vanilla HTML5, CSS3 (Modern Responsive Dashboard, CSS Variables, Glassmorphism design), Vanilla JavaScript (`static/app.js`)
 - **Data Persistence & Cache:** 
   - ข้อมูลภูมิศาสตร์ (จังหวัด/อำเภอ/ตำบล/หมู่บ้าน) เก็บเป็น JSON ใน `data/` และ `config/districts.json`
-  - รหัสผ่าน T&V ของผู้ใช้ **ไม่เก็บในฐานข้อมูลหรือไฟล์** (เก็บเฉพาะใน `sessionStorage` บน Browser ของผู้ใช้ชั่วคราวเท่านั้น)
+  - T&V username/password ของผู้ใช้ **ไม่เก็บในฐานข้อมูล ไฟล์ หรือ Web Storage**; อยู่ในหน่วยความจำของแท็บ/การรันและล้างหลังจบงาน
 - **Tunneling & Deployment:** รองรับ Cloudflare Tunnel (`cloudflared.exe`) และ Ngrok (`ngrok.exe`) เพื่อรันเปิดให้เครื่องอื่นใช้งานผ่านลิงก์ได้
 
 ---
@@ -52,7 +52,7 @@ tv_automation/
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
 ├── geo_data.py                # ตัวจัดการข้อมูลภูมิศาสตร์ (จังหวัด, อำเภอ, ตำบล, หมู่บ้าน)
-├── requirements.txt           # Python Dependencies (Flask, Playwright, Pandas, google-genai ฯลฯ)
+├── requirements.txt           # Python Dependencies ของ Flask, Playwright, Pandas และ parser แบบ local
 ├── Dockerfile & .dockerignore # การ containerize สำหรับการ deploy (HF Spaces / VPS)
 ├── docker-compose.yml         # 🚀 การสั่งรันด้วย Docker Compose แบบ 1-Command
 ├── Upload_To_GitHub.bat       # 🐙 สคริปต์ทางลัดสำหรับ Push โค้ดลง GitHub (supernopInW/tv-automation)

@@ -198,15 +198,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Gemini API keys are memory-only; never persist them in Web Storage.
-    const apiKeyInput = document.getElementById('gemini-api-key');
-    if (apiKeyInput) apiKeyInput.value = '';
-    try {
-        localStorage.removeItem('gemini_api_key');
-    } catch (_storageError) {
-        // Ignore storage access failures; the key remains memory-only.
-    }
-
     const savedApprover = localStorage.getItem('tv_approver') || '';
     if (savedApprover) document.getElementById('approver').value = savedApprover;
     document.getElementById('approver').addEventListener('input', (e) => {
@@ -2247,7 +2238,6 @@ function loadRecords(sheetName) {
     currentPlanMonth = '';
     const rowCountEl = document.getElementById('row-count');
     rowCountEl.textContent = 'กำลังโหลดตาราง...';
-    const apiKey = (document.getElementById('gemini-api-key')?.value || '').trim();
     const office = document.getElementById('office-name').value.trim();
     const tambon = document.getElementById('tambon').value.trim();
     const qs = new URLSearchParams({
@@ -2256,7 +2246,7 @@ function loadRecords(sheetName) {
         office_name: office,
         tambon: tambon
     });
-    fetch(`/api/records?${qs}`, { headers: { 'X-Gemini-API-Key': apiKey } })
+    fetch(`/api/records?${qs}`)
         .then(res => res.json())
         .then(async data => {
             if (data.success) {

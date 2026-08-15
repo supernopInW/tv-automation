@@ -25,7 +25,7 @@
 
 - **Backend:** Python 3.10+, Flask, Pandas, openpyxl, xlrd
 - **Automation Engine:** Playwright (Chromium Async/Sync API) สำหรับควบคุม Headless/Headed Browser ไปยังระบบ T&V
-- **AI Integration:** Google GenAI SDK (`google-genai`) สำหรับฟีเจอร์ช่วยวิเคราะห์/ประมวลผลข้อความจากแผน Excel
+- **Data Processing:** Local rules-based parser สำหรับอ่านและจำแนกข้อมูล Excel โดยไม่มีการเชื่อมต่อ external AI API
 - **Frontend:** Vanilla HTML5, CSS3 (Modern Responsive Dashboard, CSS Variables, Glassmorphism design), Vanilla JavaScript (`static/app.js`)
 - **Data Persistence & Cache:** ข้อมูลภูมิศาสตร์ใน `data/` และ `config/districts.json`
 - **Tunneling & Deployment:** Cloudflare Tunnel (`cloudflared.exe`) และ Ngrok (`ngrok.exe`)
