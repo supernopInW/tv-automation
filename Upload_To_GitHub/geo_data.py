@@ -9,7 +9,6 @@ from typing import Any
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-VILLAGES_DIR = os.path.join(DATA_DIR, "villages")
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
 
 
@@ -67,11 +66,6 @@ def get_villages(tambon_code: str):
     all_v = load_all_villages()
     if tcode in all_v:
         return all_v[tcode]
-    path = os.path.join(VILLAGES_DIR, f"{tcode}.json")
-    if os.path.exists(path):
-        villages = _read_json(path, [])
-        if villages:
-            return villages
     return [
         {"code": f"{tcode}-m{i}", "name_th": f"หมู่ {i}", "moo": str(i)}
         for i in range(1, 21)
