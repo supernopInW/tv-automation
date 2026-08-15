@@ -1,0 +1,146 @@
+name: Security Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 2 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  tests:
+    name: Tests and syntax
+    runs-on: ubuntu-latest
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install application dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Compile Python files
+        run: python -m py_compile app.py automate_submission.py
+      - name: Check JavaScript syntax
+        run: node --check static/app.js
+      - name: Run offline regression tests
+        run: |
+          python test_selector2_readiness.py
+          python test_workflow26_hardening.py
+          if [ -f test_clear_credentials.js ]; then node test_clear_credentials.js; fi
+      - name: Check whitespace errors
+        run: git diff --check
+
+  dependency-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Audit requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt
+
+  semgrep:
+    name: DOM XSS regression rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Install pinned Semgrep
+        run: python -m pip install semgrep==1.173.0
+      - name: Scan changed Frontend sinks
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            BASELINE="origin/$BASE_REF"
+          elif [ -n "${EVENT_BEFORE:-}" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            BASELINE="$EVENT_BEFORE"
+          else
+            echo 'No comparable baseline; running a full scan for this event.'
+            semgrep scan --config .semgrep.yml --error \
+              --exclude 'Ready_For_GitHub/**' --exclude 'Upload_To_GitHub/**'
+            exit 0
+          fi
+          semgrep scan --config .semgrep.yml --baseline-commit "$BASELINE" --error \
+            --exclude 'Ready_For_GitHub/**' --exclude 'Upload_To_GitHub/**'
+
+  codeql:
+    name: CodeQL ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: github/codeql-action/init@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          category: '/language:${{ matrix.language }}'
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  security-gate:
+    name: Security Gate
+    if: always()
+    needs: [tests, dependency-audit, semgrep, codeql, secret-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all security checks to pass
+        env:
+          TESTS: ${{ needs.tests.result }}
+          DEPENDENCIES: ${{ needs.dependency-audit.result }}
+          SEMGREP: ${{ needs.semgrep.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          SECRETS: ${{ needs.secret-scan.result }}
+        run: |
+          set -euo pipefail
+          printf 'tests=%s\ndependencies=%s\nsemgrep=%s\ncodeql=%s\nsecrets=%s\n' \
+            "$TESTS" "$DEPENDENCIES" "$SEMGREP" "$CODEQL" "$SECRETS"
+          for result in "$TESTS" "$DEPENDENCIES" "$SEMGREP" "$CODEQL" "$SECRETS"; do
+            [ "$result" = success ] || { echo 'Security Gate failed.'; exit 1; }
+          done

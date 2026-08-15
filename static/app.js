@@ -154,6 +154,37 @@ function getRandomFieldTargetCount() {
     return pool[randIdx];
 }
 
+// T&V credentials are needed only for the current run. The username has
+// historically been stored in localStorage, while the password is in
+// sessionStorage; clear both locations and the visible fields after the run.
+function clearTandVCredentials() {
+    try {
+        localStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_password');
+    } catch (storageError) {
+        // Do not expose credential values if browser storage is unavailable.
+        console.warn('ไม่สามารถล้างข้อมูลรับรอง T&V จาก browser storage ได้', storageError);
+    }
+
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
+}
+
+// Return a one-shot cleanup callback for the end of one Playwright run.
+// The guard prevents duplicate cleanup when both stream completion and an
+// error handler observe the same run ending.
+function createRunCredentialCleanup() {
+    let credentialsCleared = false;
+    return () => {
+        if (credentialsCleared) return;
+        credentialsCleared = true;
+        clearTandVCredentials();
+    };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initMooMultiSelect();
     initVillageMultiSelect();
@@ -3115,6 +3146,7 @@ function executeAutomation() {
     };
 
     const uiIndexMap = built.uiIndexMap;
+    const clearRunCredentials = createRunCredentialCleanup();
     allRecords.forEach((_, idx) => updateRowStatus(idx, 'ready'));
 
     let modeLabel = 'Dry-run (ทดสอบ)';
@@ -3149,6 +3181,7 @@ function executeAutomation() {
         function processStream() {
             reader.read().then(({ done, value }) => {
                 if (done) {
+                    clearRunCredentials();
                     startBtn.disabled = false;
                     if (completionConfirmed) {
                         logStatus.textContent = 'FINISHED';
@@ -3175,11 +3208,18 @@ function executeAutomation() {
                     }
                 });
                 processStream();
+            }).catch(err => {
+                clearRunCredentials();
+                addLog("error", `การอ่านผลการทำงานผิดพลาด: ${err.message || err}`);
+                startBtn.disabled = false;
+                logStatus.textContent = 'ERROR';
+                logStatus.style.color = 'var(--error)';
             });
         }
         processStream();
     })
     .catch(err => {
+        clearRunCredentials();
         addLog("error", `การรันผิดพลาด: ${err.message || err}`);
         startBtn.disabled = false;
         logStatus.textContent = 'ERROR';

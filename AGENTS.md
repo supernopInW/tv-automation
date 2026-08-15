@@ -282,3 +282,15 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - สถานะปัจจุบัน: production `origin/main` และ Render live อยู่ที่ `6bdee8b`; พร้อมพิจารณาใช้งานจริงในขั้น Draft เท่านั้นหลังผู้ใช้ตรวจข้อมูลอีกครั้ง. ห้ามข้ามการตรวจทานและห้ามเปลี่ยนเป็น Submit โดยอัตโนมัติ.
 
 ---
+
+
+## 20. Security Hardening CI/CD และ Frontend Secret Controls (2026-08-15)
+
+- เตรียม branch แยก `security/hardening` สำหรับยกระดับ security pipeline โดยยังไม่แก้ branch `main` หรือ Render production.
+- เพิ่ม `.github/workflows/security.yml` สำหรับ Python/JavaScript syntax และ offline regression tests, `pip-audit`, Semgrep DOM sink regression, CodeQL สำหรับ JavaScript/Python, Gitleaks และ `Security Gate` ที่ต้องผ่านทุก job ก่อนจบ workflow.
+- GitHub Actions ใน workflow ถูก pin ด้วย commit SHA ที่ตรวจสอบแล้ว; ห้ามย้ายกลับไปใช้ tag ลอยโดยไม่ review ใหม่.
+- เพิ่ม `.semgrep.yml` เพื่อป้องกันการเพิ่ม `innerHTML`, `outerHTML`, `insertAdjacentHTML` และ `document.write` ใหม่ โดยใช้ baseline scan เพื่อทยอยแก้ legacy sinks เดิม.
+- ห้ามใส่ T&V username/password, Gemini API key, Render deploy hook หรือ token ใด ๆ ใน workflow, source, log หรือ commit.
+- ก่อนเปิดใช้งานจริงต้องให้ workflow ทำงานใน Pull Request สำเร็จ, ตั้ง Branch Protection/Ruleset ของ `main` ให้ required check เป็น `Security Gate`, และตั้ง Render เป็น `After CI Checks Pass` หรือปิด auto-deploy แล้วใช้ deploy hook ที่เก็บใน GitHub Secret.
+- ห้ามกด Draft/Submit T&V ระหว่าง security/CI test และห้ามใช้ production credential ใน job ทดสอบ.
+- ผล pre-commit validation รอบแรก: security workflow structure, py_compile, node syntax, Select2 readiness tests, Workflow 26 hardening tests, credential cleanup unit test และ git diff check ผ่านแบบ offline; ยังไม่ได้ push หรือ deploy.
