@@ -36,8 +36,9 @@ def test_wait_for_select_options_waits_for_dynamic_month():
     app._wait_for_select_options(page, "select#PL_MOUNT", 2, "after-year")
     assert len(page.calls) == 1
     script, args, kwargs = page.calls[0]
-    assert "options.length >= minimum" in script
-    assert args[0] == {"selector": "select#PL_MOUNT", "minimum": 2}
+    assert "options.length >= 2" in script
+    assert 'querySelector("select#PL_MOUNT")' in script
+    assert args == ()
     assert kwargs["timeout"] == app.PLAYWRIGHT_ACTION_TIMEOUT_MS
 
 
