@@ -1,0 +1,25 @@
+rules:
+  - id: tv-automation-no-dynamic-innerhtml
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Do not add dynamic innerHTML/outerHTML assignments. Use textContent,
+      value, createElement(), append(), or a reviewed sanitizer.
+    patterns:
+      - pattern-either:
+          - pattern: $ELEMENT.innerHTML = $VALUE
+          - pattern: $ELEMENT.outerHTML = $VALUE
+          - pattern: $ELEMENT.insertAdjacentHTML($POSITION, $VALUE)
+      - pattern-not: $ELEMENT.innerHTML = ""
+      - pattern-not: $ELEMENT.innerHTML = ''
+
+  - id: tv-automation-no-document-write
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Do not use document.write() with dynamic data. Build DOM nodes and set
+      textContent/value instead.
+    patterns:
+      - pattern: document.write($VALUE)
+      - pattern-not: document.write("...")
+      - pattern-not: document.write('...')
