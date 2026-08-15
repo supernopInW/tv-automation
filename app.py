@@ -54,26 +54,58 @@ PLAYWRIGHT_RESULT_TIMEOUT_MS = 25_000
 def _page_diagnostics(page):
     """Return safe, non-sensitive diagnostics for the current portal page."""
     try:
-        return page.evaluate("""() => ({
-            url: window.location.href,
-            title: document.title,
-            readyState: document.readyState,
-            bodyText: (document.body?.innerText || '').slice(-2000),
-            loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
-            workflowReady: Boolean(document.querySelector('select#PL_YAER')),
-            modalVisible: Boolean(document.querySelector('#bizModal_402')) &&
-                getComputedStyle(document.querySelector('#bizModal_402')).display !== 'none'
-        })""")
+        return page.evaluate("""() => {
+            const selectors = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN', '#USR_APPROVERS'];
+            const workflowControls = {};
+            for (const selector of selectors) {
+                const el = document.querySelector(selector);
+                if (!el) {
+                    workflowControls[selector] = {present: false};
+                    continue;
+                }
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                workflowControls[selector] = {
+                    present: true,
+                    optionCount: el.options ? el.options.length : 0,
+                    value: el.value || '',
+                    ariaHidden: el.getAttribute('aria-hidden'),
+                    display: style.display,
+                    visibility: style.visibility,
+                    visible: Boolean(rect.width && rect.height && style.display !== 'none' && style.visibility !== 'hidden')
+                };
+            }
+            return {
+                url: window.location.href,
+                title: document.title,
+                readyState: document.readyState,
+                bodyText: (document.body?.innerText || '').slice(-2000),
+                loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
+                workflowReady: ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'].every((selector) =>
+                    workflowControls[selector]?.present && workflowControls[selector].optionCount > 1
+                ),
+                workflowControls,
+                modalVisible: Boolean(document.querySelector('#bizModal_402')) &&
+                    getComputedStyle(document.querySelector('#bizModal_402')).display !== 'none'
+            };
+        }""")
     except Exception as exc:
         return {"diagnostics_error": str(exc)}
 
 
 def _wait_for_portal_ready(page, stage):
-    """Wait for Workflow 26 controls and fail with actionable diagnostics."""
+    """Wait for Workflow 26 controls, including hidden Select2 backing selects."""
     try:
-        page.wait_for_selector('select#PL_YAER', state='visible', timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
-        page.wait_for_selector('select#PL_MOUNT', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-        page.wait_for_selector('select#PL_TAMBONN', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        # The portal wraps these native selects with Select2 and intentionally
+        # hides the backing elements. Wait for attachment and populated options,
+        # not CSS visibility of the raw <select>.
+        page.wait_for_function("""() => {
+            const required = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'];
+            return required.every((selector) => {
+                const el = document.querySelector(selector);
+                return el && el.options && el.options.length > 1;
+            });
+        }""", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
     except Exception as exc:
         state = _page_diagnostics(page)
         if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
@@ -1839,14 +1871,23 @@ def run_automation():
                             page.wait_for_timeout(180000)
 
                     q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ!"})
+                    # Close while the sync_playwright context is still alive.
+                    # The context manager owns teardown after this block; calling
+                    # browser.close() later would produce "Event loop is closed".
+                    if browser is not None:
+                        try:
+                            if browser.is_connected():
+                                browser.close()
+                        except Exception as close_exc:
+                            q.put({"type": "info", "message": f"ปิดเบราว์เซอร์ไม่สมบูรณ์: {close_exc}"})
+                        finally:
+                            browser = None
             except Exception as ex:
                 q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})
             finally:
-                if browser is not None:
-                    try:
-                        browser.close()
-                    except Exception as close_exc:
-                        q.put({"type": "info", "message": f"ปิดเบราว์เซอร์ไม่สมบูรณ์: {close_exc}"})
+                # sync_playwright() has already handled teardown on error.
+                # Do not call browser.close() after its event loop is stopped.
+                browser = None
                 _run_active = False
                 try:
                     _run_lock.release()
@@ -1865,9 +1906,9 @@ def run_automation():
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
             # The worker owns the lock and releases it only after Playwright has
-            # actually stopped. This prevents a disconnected SSE client from
-            # allowing a second run to overlap the first one.
-            _run_active = True
+            # actually stopped. Do not overwrite the worker's lifecycle state if
+            # the SSE client disconnects before the worker finishes.
+            pass
 
     return Response(event_stream(), mimetype='text/event-stream')
 

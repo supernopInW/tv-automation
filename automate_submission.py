@@ -14,13 +14,38 @@ PLAYWRIGHT_RESULT_TIMEOUT_MS = 25_000
 
 def _page_diagnostics(page):
     try:
-        return page.evaluate("""() => ({
-            url: window.location.href,
-            title: document.title,
-            bodyText: (document.body?.innerText || '').slice(-2000),
-            loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
-            workflowReady: Boolean(document.querySelector('select#PL_YAER'))
-        })""")
+        return page.evaluate("""() => {
+            const selectors = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN', '#USR_APPROVERS'];
+            const workflowControls = {};
+            for (const selector of selectors) {
+                const el = document.querySelector(selector);
+                if (!el) {
+                    workflowControls[selector] = {present: false};
+                    continue;
+                }
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                workflowControls[selector] = {
+                    present: true,
+                    optionCount: el.options ? el.options.length : 0,
+                    value: el.value || '',
+                    ariaHidden: el.getAttribute('aria-hidden'),
+                    display: style.display,
+                    visibility: style.visibility,
+                    visible: Boolean(rect.width && rect.height && style.display !== 'none' && style.visibility !== 'hidden')
+                };
+            }
+            return {
+                url: window.location.href,
+                title: document.title,
+                bodyText: (document.body?.innerText || '').slice(-2000),
+                loginVisible: Boolean(document.querySelector('input[name=USER_PASSWORD]')),
+                workflowReady: ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'].every((selector) =>
+                    workflowControls[selector]?.present && workflowControls[selector].optionCount > 1
+                ),
+                workflowControls
+            };
+        }""")
     except Exception as exc:
         return {"diagnostics_error": str(exc)}
 
@@ -29,6 +54,20 @@ def _assert_authenticated(page):
     state = _page_diagnostics(page)
     if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
         raise RuntimeError(f"AUTHENTICATION_ERROR: {state}")
+
+
+def _wait_for_portal_ready(page, stage):
+    """Wait for populated native Select2 backing selects, not raw visibility."""
+    try:
+        page.wait_for_function("""() => {
+            const required = ['#PL_YAER', '#PL_MOUNT', '#PL_TAMBONN'];
+            return required.every((selector) => {
+                const el = document.querySelector(selector);
+                return el && el.options && el.options.length > 1;
+            });
+        }""", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+    except Exception as exc:
+        raise RuntimeError(f"WORKFLOW_SELECTOR_ERROR at {stage}: {_page_diagnostics(page)}") from exc
 
 
 def _modal_validation_state(page):
@@ -446,9 +485,7 @@ def main():
         print("Navigating to Workflow 26 plan form...")
         page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
         _assert_authenticated(page)
-        page.wait_for_selector('select#PL_YAER', state='visible', timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
-        page.wait_for_selector('select#PL_MOUNT', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-        page.wait_for_selector('select#PL_TAMBONN', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+        _wait_for_portal_ready(page, "workflow_26")
         
         # 1. Fill Main Page Header Fields using JS to bypass Select2 hiding
         print(f"Selecting Year {year_num}...")
@@ -627,7 +664,14 @@ def main():
             print("======================================================")
             input()
             
-        browser.close()
+        # Close while sync_playwright is still active. On an exception the
+        # context manager handles teardown; do not close after its event loop.
+        if browser is not None:
+            try:
+                if browser.is_connected():
+                    browser.close()
+            finally:
+                browser = None
 
 if __name__ == "__main__":
     main()
