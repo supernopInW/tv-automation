@@ -1,0 +1,62 @@
+.app-auth-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    background: rgba(15, 23, 42, 0.86);
+}
+
+.app-auth-card {
+    width: min(100%, 26rem);
+    display: grid;
+    gap: 0.8rem;
+    padding: 1.5rem;
+    color: #e2e8f0;
+    background: #111827;
+    border: 1px solid #475569;
+    border-radius: 1rem;
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.35);
+}
+
+.app-auth-card h1 {
+    margin: 0;
+    font-size: 1.35rem;
+}
+
+.app-auth-card p {
+    margin: 0;
+    color: #cbd5e1;
+}
+
+.app-auth-card input,
+.app-auth-card button {
+    min-height: 2.75rem;
+    padding: 0.65rem 0.8rem;
+    border-radius: 0.6rem;
+    font: inherit;
+}
+
+.app-auth-card input {
+    color: #0f172a;
+    background: #f8fafc;
+    border: 1px solid #94a3b8;
+}
+
+.app-auth-card button {
+    color: #fff;
+    background: #7c3aed;
+    border: 0;
+    cursor: pointer;
+}
+
+.app-auth-card button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+#app-auth-status {
+    min-height: 1.25rem;
+    color: #fda4af;
+}

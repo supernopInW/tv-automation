@@ -690,17 +690,12 @@ def main():
                 page.wait_for_timeout(500)
             except Exception as e:
                 print(f"Error occurred at row {rec['row_num']}: {e}")
-                err_img = r"C:\Users\Admin\.gemini\antigravity\brain\32c4dba2-5165-43af-a43d-2d70e1a32c50\scratch\modal_error.png"
-                page.screenshot(path=err_img)
-                print(f"Saved error screenshot to {err_img}")
-                
-                err_html = r"C:\Users\Admin\.gemini\antigravity\brain\32c4dba2-5165-43af-a43d-2d70e1a32c50\scratch\modal_error.html"
                 try:
-                    with open(err_html, "w", encoding="utf-8") as f_err:
-                        f_err.write(page.locator('#bizModal_402').inner_html())
-                    print(f"Saved error HTML to {err_html}")
-                except:
-                    pass
+                    # Keep portal diagnostics transient; never write screenshot or modal HTML to disk.
+                    page.screenshot()
+                    print("Transient error screenshot captured in memory only; no artifact was written.")
+                except Exception as screenshot_exc:
+                    print(f"Transient screenshot unavailable: {type(screenshot_exc).__name__}")
                 raise e
             
         # 3. Select Approver and verify the value persisted
