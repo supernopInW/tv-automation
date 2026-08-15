@@ -566,6 +566,45 @@ def _select_modal_option(page, selector, value, label=""):
     )
 
 
+def _set_modal_select_value(page, selector, value, label=""):
+    """Set a final modal select value without firing its destructive change handler."""
+    target = str(value or "").strip()
+    target_label = str(label or "").strip()
+    state = page.evaluate(
+        """({selector, target, label}) => {
+            const select = document.querySelector(selector);
+            if (!select) return {found: false, reason: 'select-not-found'};
+            const option = Array.from(select.options).find((item) =>
+                item.value === target || (label && item.text.trim() === label)
+            );
+            if (!option) return {
+                found: false,
+                reason: 'option-not-found',
+                options: Array.from(select.options).map((item) => ({
+                    value: item.value,
+                    text: item.text.trim()
+                }))
+            };
+            select.value = option.value;
+            select.dispatchEvent(new Event('input', {bubbles: true}));
+            return {found: true, value: option.value, text: option.text.trim()};
+        }""",
+        {"selector": selector, "target": target, "label": target_label},
+    )
+    if not state.get("found"):
+        raise RuntimeError(
+            f"Portal final option was not found for {selector}: "
+            f"target={target!r}, state={state}"
+        )
+    page.wait_for_timeout(250)
+    selected = page.locator(selector).input_value()
+    if selected != state.get("value"):
+        raise RuntimeError(
+            f"Portal final option was not retained for {selector}: "
+            f"expected={state.get('value')!r}, got={selected!r}"
+        )
+
+
 def _set_modal_dates(page, date_value):
     """Set identical start/end dates for a one-day plan record."""
     same_day = str(date_value or "").strip()
@@ -1649,6 +1688,21 @@ def _fill_record_row(page, rec, idx, q, shot_prefix):
             btn.classList.remove('disabled');
         }
     }""")
+
+    # Generic change events can asynchronously rebuild PD_ACTIVITY and clear its value.
+    # Let that handler settle, then set dynamic selects without firing their destructive
+    # change handlers. Re-fill PD_OTHER after the final activity selection when needed.
+    page.wait_for_timeout(1_000)
+    _set_modal_select_value(page, '#bizModal_402 select#PD_ISSUES', rec['issue_val'])
+    _set_modal_select_value(
+        page,
+        '#bizModal_402 select#PD_ACTIVITY',
+        rec['activity_val'],
+        rec.get('activity', ''),
+    )
+    if str(rec['activity_val']) == "999" or (str(rec['issue_val']) == "2" and str(rec['activity_val']) == "999"):
+        other_val = (rec.get('other_text') or rec.get('activity') or 'ปฏิบัติงานในพื้นที่')[:30].strip()
+        modal.locator('input#PD_OTHER').fill(other_val)
 
     # Set dates last because the portal clears PD_EDATE when PD_SDATE changes.
     _set_modal_dates(page, be_date)
