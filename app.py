@@ -122,12 +122,13 @@ def _wait_for_portal_ready(page, stage):
 def _wait_for_select_options(page, selector, minimum, stage):
     """Wait for a dynamic Select2 backing select to receive enough options."""
     try:
+        selector_js = json.dumps(str(selector), ensure_ascii=False)
+        minimum_js = int(minimum)
         page.wait_for_function(
-            """({selector, minimum}) => {
-                const el = document.querySelector(selector);
-                return Boolean(el && el.options && el.options.length >= minimum);
-            }""",
-            {"selector": selector, "minimum": int(minimum)},
+            f"""() => {{
+                const el = document.querySelector({selector_js});
+                return Boolean(el && el.options && el.options.length >= {minimum_js});
+            }}""",
             timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS,
         )
     except Exception as exc:

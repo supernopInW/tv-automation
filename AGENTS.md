@@ -241,3 +241,11 @@ ode --check โดยยังไม่ส่งข้อมูลไปพอ�
 - ปรับ readiness initial ให้ยอมรับ `#PL_MOUNT` ที่มีอย่างน้อย 1 option แต่ยังตรวจ `#PL_YAER` และ `#PL_TAMBONN` ตามจำนวนขั้นต่ำที่ใช้งานได้จริง.
 - เพิ่ม `_wait_for_select_options()` ใน `app.py` และ `automate_submission.py` เพื่อรอ `#PL_MOUNT` เติม options อย่างน้อย 2 รายการหลังเลือกปี ก่อนเลือกเดือนตามชื่อ.
 - เพิ่ม assertions สำหรับ initial placeholder และ dynamic month wait ใน `test_selector2_readiness.py`; targeted tests 5 กรณี, hardening tests 4 กรณี, `py_compile` และ `git diff --check` ผ่านแบบ offline.
+
+
+## 15. แก้ Dynamic Month Wait รอบสาม (2026-08-15)
+
+- Retry บน Render ยืนยันว่า หลังเลือกปี 2569 ตัวเลือกใน `#PL_MOUNT` ถูกโหลดครบแล้ว แต่ `_wait_for_select_options()` ยังรายงาน `WORKFLOW_DYNAMIC_OPTION_ERROR` เนื่องจากการส่ง object argument ให้ `page.wait_for_function()` และการ destructuring argument ใน JavaScript predicate ไม่ทำงานตามที่คาดกับ Playwright sync runtime จริง.
+- ปรับ helper ใน `app.py` และ `automate_submission.py` ให้ serialize selector ด้วย `json.dumps()` แล้วฝัง selector และจำนวนขั้นต่ำลงใน predicate โดยตรง พร้อมตัดการส่ง argument object ออกทั้งหมด. วิธีนี้ยังคงป้องกัน selector injection จากค่าที่ไม่คาดคิดและทำให้ predicate ใช้ได้กับ runtime จริง.
+- ปรับ `test_selector2_readiness.py` ให้ตรวจ predicate แบบใหม่ว่า selector/minimum ถูกฝังถูกต้องและไม่มี positional arguments.
+- ผลตรวจสอบรอบ patch: targeted Select2 tests 4 กรณี, hardening tests 4 กรณี, `py_compile` และ `git diff --check` ผ่านทั้งหมดแบบ offline. ยังไม่ได้ Draft/Submit และยังไม่มีการส่งข้อมูลจริงไปพอร์ทัล.
