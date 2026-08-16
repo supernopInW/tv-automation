@@ -185,12 +185,44 @@ function createRunCredentialCleanup() {
     };
 }
 
+/**
+ * Wait until application auth allows protected API calls.
+ * Prevents noisy auth-gate errors when geo/sheets load before login.
+ */
+function isAppAuthGateError(err) {
+    return Boolean(
+        err
+        && (
+            err.code === 'APP_AUTH_REQUIRED'
+            || String(err.message || err).includes('APP_AUTH_REQUIRED')
+            || String(err.message || err).includes('เข้าสู่ระบบแอปก่อนใช้งาน')
+        )
+    );
+}
+
+async function waitForAppAuth() {
+    const auth = window.appAuth;
+    if (!auth || !auth.ready) return;
+    await auth.ready;
+    if (!auth.authRequired || auth.authenticated) return;
+    await new Promise((resolve) => {
+        window.addEventListener('app-authenticated', () => resolve(), { once: true });
+    });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initMooMultiSelect();
     initVillageMultiSelect();
     initTambonMultiSelect();
-    initGeoCascade();
-    fetchSheets();
+    waitForAppAuth()
+        .then(() => {
+            initGeoCascade();
+            fetchSheets();
+        })
+        .catch((err) => {
+            if (isAppAuthGateError(err)) return;
+            addLog('error', `เตรียมระบบล้มเหลว: ${err}`);
+        });
     document.getElementById('start-btn').addEventListener('click', startAutomation);
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.multi-select') && !e.target.closest('.row-moo-picker')) {
@@ -1112,6 +1144,7 @@ async function initGeoCascade() {
         }
         updateSetupSummary();
     } catch (err) {
+        if (isAppAuthGateError(err)) return;
         addLog('error', `โหลดข้อมูลภูมิศาสตร์ล้มเหลว: ${err}`);
     }
 }
@@ -2251,7 +2284,10 @@ function fetchSheets() {
                 addLog("info", "รอผู้ใช้อัปโหลดไฟล์ Excel เริ่มต้น...");
             }
         })
-        .catch(err => addLog("error", `โหลดข้อมูลชีตล้มเหลว: ${err}`));
+        .catch((err) => {
+            if (isAppAuthGateError(err)) return;
+            addLog("error", `โหลดข้อมูลชีตล้มเหลว: ${err}`);
+        });
 }
 
 function onSheetChange() {

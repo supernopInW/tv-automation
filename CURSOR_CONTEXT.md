@@ -263,7 +263,10 @@ APP_AUTH_ALLOWED_TAMBONS=<comma-separated authorized tambons>
 APP_AUTH_ALLOWED_APPROVERS=<comma-separated authorized approvers>
 APP_AUTH_CAN_SUBMIT=0
 RATELIMIT_STORAGE_URI=<Render Internal Redis/Valkey URL from Connect>
+APP_USER_REDIS_URI=<optional; defaults to RATELIMIT_STORAGE_URI>
 ```
+
+Multi-user app accounts: bootstrap admin จาก `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD_HASH`; admin สร้างลิงก์ `/?invite=TOKEN`; ผู้รับเชิญตั้ง username/password แอป (ไม่ใช่ T&V). ACL สำนักงานยังมาจาก env ร่วมกัน; สิทธิ์ตำบลพอร์ทัลยังพึ่งบัญชี T&V ตอนรัน
 
 ปัญหาที่เคยค้าง:
 

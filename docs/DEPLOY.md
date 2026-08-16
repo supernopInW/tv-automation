@@ -35,7 +35,12 @@ APP_AUTH_ALLOWED_TAMBONS=<comma-separated-authorized-tambons>
 APP_AUTH_ALLOWED_APPROVERS=<comma-separated-authorized-approvers>
 APP_AUTH_CAN_SUBMIT=0
 RATELIMIT_STORAGE_URI=redis://<redis-host>:<port>/<db>
+APP_USER_REDIS_URI=redis://<redis-host>:<port>/<db>
 ```
+
+`APP_USER_REDIS_URI` เก็บบัญชีผู้ใช้ที่รับเชิญและ invite tokens (hashed) ใน Redis/Valkey — ถ้าไม่ตั้ง จะใช้ `RATELIMIT_STORAGE_URI` เดียวกัน. ห้ามใช้ `memory://` ใน production
+
+Admin คนแรกมาจาก `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD_HASH` และสร้างลิงก์เชิญได้หลัง login. ผู้ใช้ที่รับเชิญใช้สิทธิ์ office/ตำบล/approver ชุดเดียวกับ server profile (env)
 
 เมื่อ `APP_AUTH_REQUIRED=1` ระบบจะ derive role, office, allowed tambons, approvers และสิทธิ์ submit จาก server-side profile แทนค่าที่ client ส่งมา หาก profile ไม่ครบหรือใช้ `memory://` ใน production ระบบต้อง fail closed และไม่ควรเริ่มให้บริการสาธารณะ
 

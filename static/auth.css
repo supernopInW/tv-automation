@@ -30,6 +30,11 @@
     color: #cbd5e1;
 }
 
+.app-auth-card label {
+    font-size: 0.92rem;
+    color: #e2e8f0;
+}
+
 .app-auth-card input,
 .app-auth-card button {
     min-height: 2.75rem;
@@ -56,7 +61,76 @@
     opacity: 0.65;
 }
 
+.app-auth-card label {
+    font-size: 0.9rem;
+    color: #e2e8f0;
+}
+
 #app-auth-status {
     min-height: 1.25rem;
     color: #fda4af;
+}
+
+.app-admin-bar {
+    position: sticky;
+    top: 0;
+    z-index: 9000;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.55rem 1rem;
+    color: #e2e8f0;
+    background: #0f172a;
+    border-bottom: 1px solid #334155;
+}
+
+.app-admin-bar button {
+    min-height: 2.25rem;
+    padding: 0.4rem 0.8rem;
+    color: #fff;
+    background: #7c3aed;
+    border: 0;
+    border-radius: 0.5rem;
+    font: inherit;
+    cursor: pointer;
+}
+
+#app-admin-status {
+    flex: 1 1 12rem;
+    color: #86efac;
+    word-break: break-all;
+}
+
+.app-auth-invite-bar {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 9000;
+    display: grid;
+    gap: 0.45rem;
+    width: min(100% - 2rem, 22rem);
+    padding: 0.85rem 1rem;
+    color: #e2e8f0;
+    background: rgba(17, 24, 39, 0.94);
+    border: 1px solid #475569;
+    border-radius: 0.85rem;
+    box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.28);
+}
+
+.app-auth-invite-bar button {
+    min-height: 2.4rem;
+    color: #fff;
+    background: #0f766e;
+    border: 0;
+    border-radius: 0.55rem;
+    cursor: pointer;
+    font: inherit;
+}
+
+#app-auth-invite-status {
+    margin: 0;
+    min-height: 1.1rem;
+    font-size: 0.85rem;
+    color: #99f6e4;
 }

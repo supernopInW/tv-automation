@@ -10,11 +10,24 @@ from werkzeug.security import generate_password_hash
 # remains fail-closed in the application runtime.
 os.environ['APP_ENV'] = 'test'
 os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
+os.environ['APP_USER_REDIS_URI'] = 'memory://'
 os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
 
 
 import app as app_module
+import user_auth
 from app import app
+
+
+def _bootstrap_test_user(username, password):
+    user_auth.reset_for_tests()
+    user_auth.configure('memory://')
+    app_module.app._user_store_ready = False
+    password_hash = generate_password_hash(password)
+    app_module.APP_AUTH_USERNAME = username
+    app_module.APP_AUTH_PASSWORD_HASH = password_hash
+    user_auth.bootstrap_admin(username, password_hash)
+    return password_hash
 
 
 def _csrf_token(client):
@@ -78,8 +91,7 @@ def test_protected_endpoint_requires_app_session_when_auth_enabled():
     old_hash = app_module.APP_AUTH_PASSWORD_HASH
     try:
         app_module.APP_AUTH_REQUIRED = True
-        app_module.APP_AUTH_USERNAME = 'security-test-user'
-        app_module.APP_AUTH_PASSWORD_HASH = generate_password_hash('security-test-password')
+        _bootstrap_test_user('security-test-user', 'security-test-password')
         client = app.test_client()
         response = client.get('/api/records')
         assert response.status_code == 401
@@ -96,8 +108,7 @@ def test_auth_login_and_mutation_require_csrf_token():
     old_hash = app_module.APP_AUTH_PASSWORD_HASH
     try:
         app_module.APP_AUTH_REQUIRED = True
-        app_module.APP_AUTH_USERNAME = 'security-test-user'
-        app_module.APP_AUTH_PASSWORD_HASH = generate_password_hash('security-test-password')
+        _bootstrap_test_user('security-test-user', 'security-test-password')
         client = app.test_client()
         csrf = _csrf_token(client)
 

@@ -1,7 +1,7 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
 > **Last Updated:** 2026-08-16
-> **Version:** 1.0.0
+> **Version:** 1.1.0
 
 ---
 
@@ -51,6 +51,7 @@ tv_automation/
 ├── CURSOR_CONTEXT.md          # บริบทรวมสำหรับ Cursor (security, Render, a11y, workflow)
 ├── README.md                  # คู่มือโปรเจกต์ระดับผู้ใช้/ผู้พัฒนาทั่วไป
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
+├── user_auth.py               # บัญชีแอปหลายคน + invite (Redis / memory://)
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
 ├── geo_data.py                # ตัวจัดการข้อมูลภูมิศาสตร์ (จังหวัด, อำเภอ, ตำบล, หมู่บ้าน)
 ├── requirements.txt           # Python Dependencies ของ Flask, Playwright, Pandas และ parser แบบ local
@@ -74,6 +75,7 @@ tv_automation/
 │
 ├── static/
 │   ├── app.js                 # 💻 Logic ฝั่ง Client: Event Handling, สุ่มหมู่บ้าน, กฎวันจันทร์, SSE Live Log
+│   ├── auth.js / auth.css     # Application login, invite accept, admin invite bar
 │   └── style.css              # 🎨 UI Design System & Theme Styles
 │
 ├── templates/
@@ -395,6 +397,25 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - Resolution kept the PR's fail-closed `APP_AUTH_REQUIRED=1` profile/ACL, local rules-only parser with no Gemini integration, CSP nonce/delegated bindings, exact dependency pins, Docker validation and CodeQL scope. The older opt-in auth/Gemini blocks from main were not reintroduced.
 - A duplicate Flask route block exposed by the combined files was removed; the four test suites pass with 25 tests. No T&V credentials were used and no Draft/Submit operation was performed.
 
+
+## 33. Multi-user app auth + invite (2026-08-16)
+
+- เพิ่ม `user_auth.py` เก็บผู้ใช้/invite ใน **Redis** (`APP_USER_REDIS_URI` หรือ fallback `RATELIMIT_STORAGE_URI`; `memory://` สำหรับ local/test)
+- Bootstrap admin จาก `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD_HASH`; ผู้ใช้ที่รับเชิญใช้ ACL ร่วมจาก env (role/office/tambons/approvers)
+- การแยกสิทธิ์ตำบลยังพึ่งบัญชี T&V ที่กรอกตอนรัน — ไม่เก็บรหัส T&V ใน Redis
+- API: `GET /api/auth/invite-info`, `POST /api/auth/accept-invite`, `POST /api/auth/invites` (admin), `GET /api/auth/users`, `POST /api/auth/users/<user>/active`
+- Frontend: accept invite จาก `/?invite=TOKEN` และปุ่ม “สร้างลิงก์เชิญ” สำหรับ admin เท่านั้น (`is_admin`)
+- UX: `app.js` รอ `app-authenticated` ก่อนโหลด geo/sheets เพื่อไม่ให้ log แดงก่อน login
+- ทดสอบออฟไลน์ผ่าน: `test_user_auth.py` (4), hardening (6), Select2 (4), security headers (8); `node --check static/auth.js`
+- สถานะโค้ด: ยัง **uncommitted บน local `main`** — ต้อง branch/commit/PR แล้ว deploy ถึง Render จึงใช้เชิญจริงได้ (Disk ไม่จำเป็น; ใช้ Redis เดิม)
+
+## 32. Render Phase 1 authorization profile + deploy (2026-08-16)
+
+- PR #5 squash-merged เข้า `main` เป็น `313a3f8`
+- ตรวจ Render Environment: มี auth secrets + Redis อยู่แล้ว แต่ขาด authorization profile
+- เพิ่ม `APP_AUTH_ROLE`, `APP_AUTH_OFFICE_NAME`, `APP_AUTH_ALLOWED_TAMBONS`, `APP_AUTH_ALLOWED_APPROVERS`, `APP_AUTH_CAN_SUBMIT=0` แล้ว Save/rebuild/deploy
+- ผล: **Deploy live for `313a3f8`**; `/api/health` ok; `/api/access/status` ตอบ `auth_required:true` + CSRF (ยังไม่ login)
+- ขั้นตอนถัดไป: login ด้วยบัญชีแอปบน `https://tv-automation.onrender.com` แล้วค่อย smoke `dry_run` (ยังห้าม Draft/Submit)
 
 ## 31. Cursor handoff จาก Manus (2026-08-16)
 

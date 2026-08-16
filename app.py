@@ -18,9 +18,9 @@ from flask_limiter.util import get_remote_address
 import json
 import os
 from werkzeug.exceptions import RequestEntityTooLarge
-from werkzeug.security import check_password_hash
 
 import geo_data
+import user_auth
 
 APP_SESSION_SECRET = os.environ.get('APP_SESSION_SECRET', '').strip()
 
@@ -72,8 +72,12 @@ limiter = Limiter(
 PROTECTED_API_PATHS = {
     '/api/add-row', '/api/upload', '/api/sheets', '/api/records',
     '/api/historical-activities', '/api/run',
+    '/api/auth/invites', '/api/auth/users',
 }
-PUBLIC_API_PATHS = {'/api/health', '/api/access/status', '/api/auth/login', '/api/auth/logout', '/api/csp-report'}
+PUBLIC_API_PATHS = {
+    '/api/health', '/api/access/status', '/api/auth/login', '/api/auth/logout',
+    '/api/csp-report', '/api/auth/invite-info', '/api/auth/accept-invite',
+}
 
 UPLOAD_TTL_SECONDS = int(os.environ.get('UPLOAD_TTL_SECONDS', '1800'))
 UPLOAD_REGISTRY = {}
@@ -109,13 +113,31 @@ def _app_authenticated():
     return bool(session.get('app_user'))
 
 
+def _session_is_admin():
+    return bool(session.get('app_is_admin'))
+
+
+def _ensure_user_store():
+    """Initialize Redis user store and sync bootstrap admin from env."""
+    if getattr(app, '_user_store_ready', False):
+        if APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH:
+            user_auth.bootstrap_admin(APP_AUTH_USERNAME, APP_AUTH_PASSWORD_HASH)
+        return
+    user_redis_uri = os.environ.get('APP_USER_REDIS_URI', '').strip() or RATE_LIMIT_STORAGE_URI
+    user_auth.configure(user_redis_uri)
+    if APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH:
+        user_auth.bootstrap_admin(APP_AUTH_USERNAME, APP_AUTH_PASSWORD_HASH)
+    app._user_store_ready = True
+
+
 def _normalize_tambon_name(value):
     return str(value or '').replace('ตำบล', '').replace('แขวง', '').strip()
 
 
 def _server_auth_profile():
+    """Shared office ACL for every authenticated app user (env-derived)."""
     return {
-        'username': APP_AUTH_USERNAME,
+        'username': session.get('app_user') or APP_AUTH_USERNAME,
         'role': APP_AUTH_ROLE or 'officer',
         'office_name': APP_AUTH_OFFICE_NAME,
         'allowed_tambons': APP_AUTH_ALLOWED_TAMBONS,
@@ -203,7 +225,14 @@ def enforce_api_access_boundary():
     if request.path in {'/api/health', '/api/csp-report'}:
         return None
     _ensure_csrf_token()
-    if request.path in {'/api/access/status', '/api/auth/login', '/api/auth/logout'}:
+    public_auth_paths = {
+        '/api/access/status',
+        '/api/auth/login',
+        '/api/auth/logout',
+        '/api/auth/invite-info',
+        '/api/auth/accept-invite',
+    }
+    if request.path in public_auth_paths:
         if request.path != '/api/access/status' and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and not _csrf_valid():
             return jsonify({'success': False, 'error': 'คำขอไม่ผ่านการตรวจสอบความปลอดภัย'}), 403
         return None
@@ -277,6 +306,10 @@ os.makedirs('docs', exist_ok=True)
 # Global variables and paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_XLS_PATH = os.path.join(BASE_DIR, "แผนเดือนพค69.xls")
+user_auth.configure(os.environ.get('APP_USER_REDIS_URI', '').strip() or RATE_LIMIT_STORAGE_URI)
+if APP_AUTH_USERNAME and APP_AUTH_PASSWORD_HASH:
+    user_auth.bootstrap_admin(APP_AUTH_USERNAME, APP_AUTH_PASSWORD_HASH)
+app._user_store_ready = True
 UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "tv-automation-uploads")
 os.makedirs(UPLOAD_DIR, mode=0o700, exist_ok=True)
 
@@ -1352,17 +1385,24 @@ def load_historical_activity_pool():
 
 @app.route('/api/access/status')
 def access_status():
-    return jsonify({
+    _ensure_user_store()
+    authenticated = _app_authenticated()
+    payload = {
         'success': True,
         'auth_required': APP_AUTH_REQUIRED,
-        'authenticated': _app_authenticated(),
+        'authenticated': authenticated,
         'csrf_token': _ensure_csrf_token(),
-    })
+    }
+    if authenticated:
+        payload['username'] = session.get('app_user')
+        payload['is_admin'] = _session_is_admin()
+    return jsonify(payload)
 
 
 @app.route('/api/auth/login', methods=['POST'])
 @limiter.limit('5 per minute; 20 per hour', key_func=_rate_limit_key)
 def app_login():
+    _ensure_user_store()
     data = request.get_json(silent=True) or {}
     username = str(data.get('username') or '').strip()
     password = str(data.get('password') or '')
@@ -1370,20 +1410,117 @@ def app_login():
         return jsonify({'success': False, 'error': 'เข้าสู่ระบบไม่สำเร็จ'}), 401
     if not _auth_configured():
         return jsonify({'success': False, 'error': 'ระบบยืนยันตัวตนยังไม่ได้ตั้งค่า'}), 503
-    valid = hmac.compare_digest(username, APP_AUTH_USERNAME) and check_password_hash(APP_AUTH_PASSWORD_HASH, password)
-    if not valid:
+    account = user_auth.authenticate(username, password)
+    if not account:
         return jsonify({'success': False, 'error': 'เข้าสู่ระบบไม่สำเร็จ'}), 401
     session.clear()
-    session['app_user'] = APP_AUTH_USERNAME
+    session['app_user'] = account['username']
+    session['app_is_admin'] = bool(account['is_admin'])
     session['csrf_token'] = secrets.token_urlsafe(32)
     session.permanent = True
-    return jsonify({'success': True, 'csrf_token': session['csrf_token']})
+    return jsonify({
+        'success': True,
+        'csrf_token': session['csrf_token'],
+        'username': account['username'],
+        'is_admin': bool(account['is_admin']),
+    })
 
 
 @app.route('/api/auth/logout', methods=['POST'])
 def app_logout():
     session.clear()
     return ('', 204)
+
+
+@app.route('/api/auth/invite-info', methods=['GET'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
+def invite_info():
+    _ensure_user_store()
+    token = str(request.args.get('token') or '').strip()
+    if not token or len(token) > 256:
+        return jsonify({'success': False, 'valid': False, 'error': 'ลิงก์เชิญไม่ถูกต้อง'}), 400
+    info = user_auth.peek_invite(token)
+    if not info:
+        return jsonify({'success': False, 'valid': False, 'error': 'ลิงก์เชิญไม่ถูกต้อง'}), 404
+    if not info.get('valid'):
+        reason = info.get('reason')
+        message = 'ลิงก์เชิญถูกใช้แล้ว' if reason == 'used' else 'ลิงก์เชิญหมดอายุ'
+        return jsonify({'success': False, 'valid': False, 'error': message}), 410
+    return jsonify({'success': True, 'valid': True, 'expires_at': info['expires_at']})
+
+
+@app.route('/api/auth/accept-invite', methods=['POST'])
+@limiter.limit('10 per minute; 30 per hour', key_func=_rate_limit_key)
+def accept_invite():
+    _ensure_user_store()
+    data = request.get_json(silent=True) or {}
+    token = str(data.get('token') or '').strip()
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if len(token) > 256 or len(username) > 256 or len(password) > 1024:
+        return jsonify({'success': False, 'error': 'รับเชิญไม่สำเร็จ'}), 400
+    try:
+        account = user_auth.accept_invite(token, username, password)
+    except ValueError as exc:
+        code = str(exc)
+        messages = {
+            'invalid_username': 'ชื่อผู้ใช้ต้องเป็น a-z, 0-9, . _ - ความยาว 3-64 ตัว',
+            'weak_password': f'รหัสผ่านต้องยาวอย่างน้อย {user_auth.MIN_PASSWORD_LENGTH} ตัวอักษร',
+            'invalid_invite': 'ลิงก์เชิญไม่ถูกต้อง',
+            'used': 'ลิงก์เชิญถูกใช้แล้ว',
+            'expired': 'ลิงก์เชิญหมดอายุ',
+            'username_taken': 'ชื่อผู้ใช้นี้ถูกใช้แล้ว',
+        }
+        return jsonify({'success': False, 'error': messages.get(code, 'รับเชิญไม่สำเร็จ')}), 400
+    session.clear()
+    session['app_user'] = account['username']
+    session['app_is_admin'] = False
+    session['csrf_token'] = secrets.token_urlsafe(32)
+    session.permanent = True
+    return jsonify({
+        'success': True,
+        'csrf_token': session['csrf_token'],
+        'username': account['username'],
+        'is_admin': False,
+    })
+
+
+@app.route('/api/auth/invites', methods=['POST'])
+@limiter.limit('10 per hour', key_func=_rate_limit_key)
+def create_invite():
+    _ensure_user_store()
+    if not _session_is_admin():
+        return jsonify({'success': False, 'error': 'เฉพาะผู้ดูแลระบบเท่านั้นที่สร้างลิงก์เชิญได้'}), 403
+    invite = user_auth.create_invite(session.get('app_user') or '')
+    invite_url = f"{request.url_root.rstrip('/')}/?invite={invite['token']}"
+    return jsonify({
+        'success': True,
+        'token': invite['token'],
+        'invite_url': invite_url,
+        'expires_at': invite['expires_at'],
+    })
+
+
+@app.route('/api/auth/users', methods=['GET'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
+def list_app_users():
+    _ensure_user_store()
+    if not _session_is_admin():
+        return jsonify({'success': False, 'error': 'เฉพาะผู้ดูแลระบบเท่านั้นที่ดูรายชื่อผู้ใช้ได้'}), 403
+    return jsonify({'success': True, 'users': user_auth.list_users()})
+
+
+@app.route('/api/auth/users/<username>/active', methods=['POST'])
+@limiter.limit('30 per minute', key_func=_rate_limit_key)
+def set_app_user_active(username):
+    _ensure_user_store()
+    if not _session_is_admin():
+        return jsonify({'success': False, 'error': 'เฉพาะผู้ดูแลระบบเท่านั้นที่จัดการผู้ใช้ได้'}), 403
+    data = request.get_json(silent=True) or {}
+    active = bool(data.get('active'))
+    if not user_auth.set_user_active(username, active):
+        return jsonify({'success': False, 'error': 'ไม่พบผู้ใช้หรือไม่สามารถเปลี่ยนสถานะได้'}), 400
+    return jsonify({'success': True})
 
 
 @app.route('/')

@@ -7,8 +7,8 @@
 **Service:** `tv-automation`  
 **Service ID:** `srv-d9o5jvlaeets73d4tfp0`  
 **Live URL:** `https://tv-automation.onrender.com`  
-**Target commit:** `e818d5f`  
-**สถานะล่าสุด (2026-08-16):** deploy `e818d5f` ล้มด้วย `Production authorization profile is not configured` — health ที่ยัง `ok` อาจเป็น instance เก่า
+**Target commit (Phase 1 auth profile):** `313a3f8` — **Deploy live** แล้วหลังเติม authorization profile
+**ถัดไป:** deploy โค้ด multi-user + invite (ยังอยู่ local / ยังไม่ขึ้น `main` จนกว่าจะ commit+merge)
 
 ---
 
@@ -18,15 +18,16 @@
 |---|---|---|
 | `APP_ENV` | `production` | บังคับ |
 | `APP_AUTH_REQUIRED` | `1` | fail-closed; ห้ามเป็น `0` |
-| `APP_AUTH_USERNAME` | username ของแอป (ไม่ใช่ T&V) | ผู้ใช้สร้างเอง |
+| `APP_AUTH_USERNAME` | username ของแอป (ไม่ใช่ T&V) | bootstrap admin |
 | `APP_AUTH_PASSWORD_HASH` | Werkzeug password hash | ห้ามใส่รหัสผ่าน plain text |
 | `APP_SESSION_SECRET` | random secret ≥ 32 bytes | ห้ามใช้ placeholder |
-| `APP_AUTH_ROLE` | เช่น `officer` | **เคยขาด → ทำให้ deploy ล้ม** |
-| `APP_AUTH_OFFICE_NAME` | เช่น `สำนักงานเกษตรอำเภอสีดา` | **เคยขาด → ทำให้ deploy ล้ม** |
-| `APP_AUTH_ALLOWED_TAMBONS` | รายชื่อตำบลคั่นด้วย comma | **เคยขาด → ทำให้ deploy ล้ม** |
-| `APP_AUTH_ALLOWED_APPROVERS` | รายชื่อผู้อนุมัติคั่นด้วย comma | **เคยขาด → ทำให้ deploy ล้ม** |
+| `APP_AUTH_ROLE` | เช่น `officer` | ตั้งแล้วบน live |
+| `APP_AUTH_OFFICE_NAME` | เช่น `สำนักงานเกษตรอำเภอสีดา` | ตั้งแล้วบน live |
+| `APP_AUTH_ALLOWED_TAMBONS` | รายชื่อตำบลคั่นด้วย comma | ตั้งแล้วบน live |
+| `APP_AUTH_ALLOWED_APPROVERS` | รายชื่อผู้อนุมัติคั่นด้วย comma | ตั้งแล้วบน live |
 | `APP_AUTH_CAN_SUBMIT` | `0` | คงไว้จนกว่าจะอนุมัติสิทธิ์ Submit |
 | `RATELIMIT_STORAGE_URI` | Redis/Valkey **Internal** URL จากเมนู Connect | ห้าม `memory://` และห้ามเว็บ URL ของแอป |
+| `APP_USER_REDIS_URI` | (ทางเลือก) Redis เดียวกันหรือ DB แยก | ถ้าไม่ตั้ง ใช้ `RATELIMIT_STORAGE_URI`; เก็บ users/invites (hashed) |
 
 ### สร้าง password hash (บนเครื่อง local)
 
@@ -42,13 +43,13 @@ venv\Scripts\python.exe -c "from werkzeug.security import generate_password_hash
 venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-### Redis / Valkey
+### Redis / Valkey (rate limit + app users)
 
-1. สร้าง Key Value (Redis/Valkey) บน Render หากยังไม่มี  
-2. เปิดเมนู **Connect** ของ instance นั้น  
-3. คัดลอก **Internal URL** ไปใส่ `RATELIMIT_STORAGE_URI`  
-4. อย่าใช้ External URL ในเอกสารสาธารณะ และอย่าใส่ `https://tv-automation.onrender.com/`
+ใช้ Internal URL เดียวกันได้สำหรับ:
+- `RATELIMIT_STORAGE_URI` — rate limiting
+- `APP_USER_REDIS_URI` — (optional) ถ้าไม่ตั้ง จะใช้ค่าเดียวกับ `RATELIMIT_STORAGE_URI`
 
+ผู้ใช้แอป/invite ถูกเก็บใน Redis; admin bootstrap จาก `APP_AUTH_USERNAME` + `APP_AUTH_PASSWORD_HASH`
 ---
 
 ## 2. ขั้นตอนบน Render Dashboard
@@ -56,7 +57,7 @@ venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
 1. เปิด service `tv-automation` → **Environment**
 2. ตั้งค่าตัวแปรในตารางด้านบนให้ครบ (อย่าลด guards)
 3. **Save Changes**
-4. **Manual Deploy** ของ commit `e818d5f` (หรือ latest `main`)
+4. **Manual Deploy** ของ latest `main` (หลัง merge multi-user) หรือ commit ที่ต้องการ
 5. เปิด **Logs** ตรวจว่าไม่มี:
    - `Production authorization profile is not configured`
    - `Production application authentication secrets are not configured`
@@ -65,7 +66,8 @@ venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
    - `GET https://tv-automation.onrender.com/api/health` → `status: ok`
    - `GET https://tv-automation.onrender.com/api/access/status` → auth contract ตอบได้
 7. Login ด้วย **บัญชีแอป** ที่ตั้งเอง (ไม่ใช่บัญชี T&V)
-8. ห้ามกด Draft / Submit / `/api/run` ไปพอร์ทัลจริงจนกว่าจะพร้อมทดสอบ dry_run โดยตั้งใจ
+8. (หลัง deploy invite) Admin กด **สร้างลิงก์เชิญ** → ส่ง URL ให้ผู้ใช้ใหม่ → ผู้ใช้เปิด `/?invite=...` ตั้งรหัสแอป
+9. ห้ามกด Draft / Submit / `/api/run` ไปพอร์ทัลจริงจนกว่าจะพร้อมทดสอบ dry_run โดยตั้งใจ
 
 ---
 
