@@ -186,7 +186,9 @@ GET read-only routes ไม่ต้องใช้ CSRF header แต่ POST/P
 
 `APP_AUTH_REQUIRED=1` เป็น fail-closed default. เมื่อเปิด production ระบบต้องมี username, Werkzeug password hash และ random session secret. หากค่าขาด startup ต้องหยุด ไม่ควร fallback เป็น unauthenticated mode
 
-Application login แยกจาก T&V login. `static/auth.js` สร้าง overlay สำหรับ login ของแอปและ inject CSRF header ให้ same-origin mutation requests. T&V username/password ไม่ควรเก็บถาวรบน server หรือ browser storage ที่ไม่จำเป็น
+Application login แยกจาก T&V login. `static/auth.js` สร้าง overlay สำหรับ login ของแอปและ inject CSRF header ให้ same-origin mutation requests.
+
+**T&V login เป็น user-driven session (ตั้งแต่ 2026-08-16):** `/api/run` ไม่รับ T&V username/password อีกต่อไป (payload ที่มี credential ถูกปฏิเสธ 400). ผู้ใช้กด `POST /api/tv-browser/start` เพื่อเปิด headed Chromium (persistent profile ที่ `data/browser-profile/` — gitignored, local เท่านั้น) แล้ว Login T&V เอง; `GET /api/tv-browser/status` ใช้ `is_tv_logged_in(page)` ตรวจจากเนื้อหา page (login form + auth markers ไม่ใช่ URL เดี่ยว ๆ) และ automation ใช้ session เดียวกันผ่าน `TvBrowserSession` (Playwright objects ถูกจำกัดใน worker thread เดียว). บน Render/headless `/api/run` และ `/api/tv-browser/*` ปฏิเสธพร้อมข้อความ local-only. ห้ามส่ง cookie/token ของ T&V กลับใน API response หรือเก็บบน Flask server
 
 ### 6.2 Server-side authorization profile
 

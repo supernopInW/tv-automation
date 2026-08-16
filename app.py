@@ -405,6 +405,239 @@ PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 30_000
 PLAYWRIGHT_ACTION_TIMEOUT_MS = 15_000
 PLAYWRIGHT_RESULT_TIMEOUT_MS = 25_000
 
+# Persistent Chromium profile that holds the officer's own T&V login session.
+# This directory contains portal cookies: it must stay on the operator machine,
+# is gitignored, and must never be served by Flask or uploaded anywhere.
+TV_BROWSER_PROFILE_DIR = os.environ.get(
+    'TV_BROWSER_PROFILE_DIR',
+    str(Path(__file__).resolve().parent / 'data' / 'browser-profile'),
+)
+
+
+def _local_headed_available():
+    """Portal automation needs a headed browser on the machine running Flask."""
+    if os.environ.get('HEADLESS', '0') == '1':
+        return False
+    if sys.platform in ('win32', 'darwin'):
+        return True
+    return bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
+
+
+def is_tv_logged_in(page):
+    """Check T&V login state from page content, not from the URL alone.
+
+    Logged in requires: no visible login form, a non-login URL path, and at
+    least one authenticated-chrome marker (logout/workflow link or Workflow 26
+    controls). Never returns or logs credentials or session tokens.
+    """
+    try:
+        state = page.evaluate("""() => ({
+            urlPath: window.location.pathname || '',
+            loginVisible: Boolean(document.querySelector('input[name="USER_PASSWORD"]')),
+            authMarkers: Boolean(
+                document.querySelector('a[href*="logout"]')
+                || document.querySelector('a[href*="workflow"]')
+                || document.querySelector('#PL_YAER')
+                || document.querySelector('a[href*="main_tv_system"]')
+            ),
+        })""")
+    except Exception:
+        return False
+    if not isinstance(state, dict) or state.get('loginVisible'):
+        return False
+    path = str(state.get('urlPath') or '').lower()
+    if not path or path in ('blank', '/') and not state.get('authMarkers'):
+        return False
+    if 'login' in path:
+        return False
+    return bool(state.get('authMarkers'))
+
+
+class TvBrowserSession:
+    """Owns one headed persistent Playwright context on a dedicated thread.
+
+    All Playwright objects stay on the worker thread. Flask handlers talk to
+    the worker only through the command queue, so the sync API is never used
+    across threads. The persistent profile keeps the user-established T&V
+    session between the login step and the automation run; no cookie, token,
+    or credential ever crosses into Flask request/response bodies.
+    """
+
+    _COMMAND_WAIT_SECONDS = 20
+
+    def __init__(self, profile_dir):
+        self._profile_dir = profile_dir
+        self._commands = queue.Queue()
+        self._thread = None
+        self._start_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._last_status = {
+            'running': False,
+            'logged_in': False,
+            'message': 'ยังไม่ได้เปิดเบราว์เซอร์สำหรับ Login T&V',
+        }
+
+    def _set_status(self, running, logged_in, message):
+        with self._state_lock:
+            self._last_status = {
+                'running': bool(running),
+                'logged_in': bool(logged_in),
+                'message': str(message),
+            }
+
+    def last_status(self):
+        with self._state_lock:
+            return dict(self._last_status)
+
+    def is_running(self):
+        thread = self._thread
+        return bool(thread and thread.is_alive())
+
+    def start(self):
+        """Launch (or focus) the headed login browser at the T&V login page."""
+        with self._start_lock:
+            if self.is_running():
+                self._commands.put(('goto_login', None, None))
+                return {'success': True, 'message': 'เบราว์เซอร์ T&V เปิดอยู่แล้ว กรุณา Login ในหน้าต่างที่เปิดไว้'}
+            self._thread = threading.Thread(target=self._worker, daemon=True)
+            self._thread.start()
+        return {'success': True, 'message': 'กำลังเปิดเบราว์เซอร์ กรุณา Login T&V ด้วยบัญชีของท่านในหน้าต่างที่เปิดขึ้น'}
+
+    def status(self):
+        """Poll login state; falls back to last known state while busy."""
+        if not self.is_running():
+            return {'running': False, 'logged_in': False,
+                    'message': 'ยังไม่ได้เปิดเบราว์เซอร์สำหรับ Login T&V'}
+        reply = queue.Queue(maxsize=1)
+        self._commands.put(('status', None, reply))
+        try:
+            return reply.get(timeout=self._COMMAND_WAIT_SECONDS)
+        except queue.Empty:
+            fallback = self.last_status()
+            fallback['message'] = 'เบราว์เซอร์กำลังทำงานอื่นอยู่ (เช่นรัน Automation) ใช้สถานะล่าสุดแทน'
+            return fallback
+
+    def stop(self):
+        if not self.is_running():
+            return {'success': True, 'message': 'เบราว์เซอร์ปิดอยู่แล้ว'}
+        reply = queue.Queue(maxsize=1)
+        self._commands.put(('stop', None, reply))
+        try:
+            reply.get(timeout=self._COMMAND_WAIT_SECONDS)
+        except queue.Empty:
+            pass
+        return {'success': True, 'message': 'สั่งปิดเบราว์เซอร์แล้ว'}
+
+    def submit_run(self, job, on_abort):
+        """Queue an automation job; on_abort runs if the browser dies first."""
+        if not self.is_running():
+            return False
+        self._commands.put(('run', (job, on_abort), None))
+        return True
+
+    def _active_page(self, context):
+        for open_page in context.pages:
+            if not open_page.is_closed():
+                return open_page
+        return context.new_page()
+
+    def _worker(self):
+        from playwright.sync_api import sync_playwright
+        launched = False
+        try:
+            os.makedirs(self._profile_dir, exist_ok=True)
+            with sync_playwright() as p:
+                context = p.chromium.launch_persistent_context(
+                    self._profile_dir,
+                    headless=False,
+                    viewport=None,
+                    args=['--start-maximized'],
+                )
+                launched = True
+                page = self._active_page(context)
+                page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                try:
+                    page.goto(PORTAL_LOGIN_URL, wait_until='domcontentloaded',
+                              timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                except Exception:
+                    # Login page may redirect for an already-authenticated profile.
+                    pass
+                self._set_status(True, is_tv_logged_in(page),
+                                 'เปิดเบราว์เซอร์แล้ว กรุณา Login T&V ในหน้าต่างที่เปิดขึ้น')
+                while True:
+                    try:
+                        command, payload, reply = self._commands.get(timeout=1.0)
+                    except queue.Empty:
+                        if not context.pages or all(pg.is_closed() for pg in context.pages):
+                            break
+                        continue
+                    if command == 'stop':
+                        if reply is not None:
+                            reply.put({'success': True})
+                        break
+                    if command == 'goto_login':
+                        try:
+                            page = self._active_page(context)
+                            if not is_tv_logged_in(page):
+                                page.goto(PORTAL_LOGIN_URL, wait_until='domcontentloaded',
+                                          timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                            page.bring_to_front()
+                        except Exception:
+                            pass
+                    elif command == 'status':
+                        try:
+                            page = self._active_page(context)
+                            logged_in = is_tv_logged_in(page)
+                            message = ('T&V: Logged In' if logged_in
+                                       else 'T&V: ยังไม่ได้ Login — กรุณา Login ในหน้าต่างเบราว์เซอร์')
+                        except Exception:
+                            logged_in = False
+                            message = 'อ่านสถานะจากเบราว์เซอร์ไม่สำเร็จ'
+                        self._set_status(True, logged_in, message)
+                        if reply is not None:
+                            reply.put({'running': True, 'logged_in': logged_in, 'message': message})
+                    elif command == 'run':
+                        job, _on_abort = payload
+                        try:
+                            page = self._active_page(context)
+                            page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                            page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                            job(page)
+                        except Exception:
+                            # The job reports its own errors on its SSE queue;
+                            # never let a job failure kill the login session.
+                            pass
+                try:
+                    context.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            if not launched:
+                self._set_status(False, False,
+                                 f'เปิดเบราว์เซอร์ไม่สำเร็จ: {type(exc).__name__}')
+        finally:
+            if launched:
+                self._set_status(False, False, 'เบราว์เซอร์ T&V ถูกปิดแล้ว')
+            # Abort queued jobs so SSE streams and locks are not orphaned.
+            while True:
+                try:
+                    command, payload, reply = self._commands.get_nowait()
+                except queue.Empty:
+                    break
+                if command == 'run' and payload:
+                    _job, on_abort = payload
+                    try:
+                        on_abort()
+                    except Exception:
+                        pass
+                elif reply is not None:
+                    reply.put({'running': False, 'logged_in': False,
+                               'message': 'เบราว์เซอร์ T&V ถูกปิดแล้ว', 'success': True})
+
+
+_tv_session = TvBrowserSession(TV_BROWSER_PROFILE_DIR)
+
 
 def _page_diagnostics(page):
     """Return safe, non-sensitive diagnostics for the current portal page."""
@@ -2018,35 +2251,100 @@ def _finish_plan(page, mode, q):
     q.put({"type": "info", "message": f"ยืนยันผลแล้ว: {label}"})
 
 
+TV_BROWSER_LOCAL_ONLY_ERROR = (
+    "การกรอกข้อมูลอัตโนมัติต้องใช้เบราว์เซอร์บนเครื่องที่รันระบบนี้ (local) "
+    "— ไม่รองรับบนเซิร์ฟเวอร์ headless เช่น Render"
+)
+TV_NOT_LOGGED_IN_ERROR = "T&V ยังไม่ได้เข้าสู่ระบบ กรุณา Login T&V ก่อนเริ่ม Automation"
+TV_SESSION_EXPIRED_MESSAGE = (
+    "T&V Session หมดอายุหรือถูกออกจากระบบ — หยุดการทำงานแล้ว "
+    "กรุณา Login T&V ใหม่ในหน้าต่างเบราว์เซอร์ แล้วเริ่ม Automation อีกครั้ง"
+)
+
+
+@app.route('/api/tv-browser/start', methods=['POST'])
+@limiter.limit('10 per 10 minutes', key_func=_rate_limit_key)
+def tv_browser_start():
+    """Open the headed login browser. Never accepts or forwards credentials."""
+    if not _local_headed_available():
+        return jsonify({"success": False, "error": TV_BROWSER_LOCAL_ONLY_ERROR}), 503
+    if _run_active:
+        return jsonify({
+            "success": False,
+            "error": "Automation กำลังทำงานอยู่ ไม่สามารถเปิดหน้าต่าง Login ใหม่ได้ในขณะนี้",
+        }), 409
+    return jsonify(_tv_session.start())
+
+
+@app.route('/api/tv-browser/status')
+@limiter.limit('60 per minute', key_func=_rate_limit_key)
+def tv_browser_status():
+    """Report T&V login state only — no cookies, tokens, or portal content."""
+    if not _local_headed_available():
+        return jsonify({
+            "available": False,
+            "running": False,
+            "logged_in": False,
+            "message": TV_BROWSER_LOCAL_ONLY_ERROR,
+        })
+    if _run_active:
+        status = _tv_session.last_status()
+    else:
+        status = _tv_session.status()
+    return jsonify({
+        "available": True,
+        "running": bool(status.get('running')),
+        "logged_in": bool(status.get('logged_in')),
+        "message": status.get('message', ''),
+    })
+
+
+@app.route('/api/tv-browser/stop', methods=['POST'])
+@limiter.limit('10 per 10 minutes', key_func=_rate_limit_key)
+def tv_browser_stop():
+    if _run_active:
+        return jsonify({
+            "success": False,
+            "error": "Automation กำลังทำงานอยู่ กรุณารอให้เสร็จก่อนปิดเบราว์เซอร์",
+        }), 409
+    return jsonify(_tv_session.stop())
+
+
 @app.route('/api/run', methods=['POST'])
 @limiter.limit('2 per 10 minutes', key_func=_rate_limit_key)
 def run_automation():
     global _run_active
     data = request.json or {}
     records = data.get('records', [])
+
+    # The API no longer handles T&V credentials in any form. Reject payloads
+    # that still carry them so old clients fail loudly instead of leaking.
+    if data.get('password') or data.get('username'):
+        return jsonify({
+            "success": False,
+            "error": "ระบบไม่รับชื่อผู้ใช้/รหัสผ่าน T&V ผ่าน API อีกต่อไป "
+                     "กรุณา Login T&V ในหน้าต่างเบราว์เซอร์ผ่านปุ่ม Login T&V แทน",
+        }), 400
+
     run_context, authorization_error = _validate_run_authorization(data)
     if authorization_error:
         error_body, error_status = authorization_error
         return jsonify(error_body), error_status
 
-    username = (data.get('username') or '').strip()
-    password = data.get('password') or ''
+    if not _local_headed_available():
+        return jsonify({"success": False, "error": TV_BROWSER_LOCAL_ONLY_ERROR}), 503
+
     sheet_name = data.get('sheet', 'มิ.ย.69')
     tambon = run_context['tambon']
     role = run_context['role']
     office_name = run_context['office_name']
     approver = run_context['approver']
-    headless = data.get('headless', False)
-    if sys.platform != 'win32' or os.environ.get('HEADLESS', '0') == '1':
-        headless = True
     mode = run_context['mode']
 
-    # Each officer must supply their own T&V account — never use shared defaults
-    if not username or not password:
-        return jsonify({
-            "success": False,
-            "error": "กรุณากรอกชื่อผู้ใช้และรหัสผ่านบัญชี T&V ของท่านเอง"
-        }), 400
+    # Automation reuses the browser session the officer logged into manually.
+    tv_status = _tv_session.status()
+    if not tv_status.get('running') or not tv_status.get('logged_in'):
+        return jsonify({"success": False, "error": TV_NOT_LOGGED_IN_ERROR}), 409
 
     if not _run_lock.acquire(blocking=False):
         return jsonify({
@@ -2067,103 +2365,97 @@ def run_automation():
         global _run_active
         q = queue.Queue()
 
-        def run_playwright():
-            from playwright.sync_api import sync_playwright
-            browser = None
+        def release_run_state():
+            global _run_active
+            _run_active = False
+            try:
+                _run_lock.release()
+            except RuntimeError:
+                pass
+
+        def on_abort():
+            q.put({"type": "error", "message": "เบราว์เซอร์ T&V ถูกปิดก่อนเริ่มงาน — ยกเลิกการทำงาน"})
+            release_run_state()
+            q.put(None)
+
+        def run_job(page):
+            """Executed on the TV browser session thread with the logged-in page."""
             try:
                 q.put({"type": "info", "message": f"พื้นที่: {office_name or '-'} | บทบาท: {role} | ตำบลที่จะกรอก: {len(groups)} กลุ่ม"})
-                q.put({"type": "info", "message": "กำลังเปิดเบราว์เซอร์..."})
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=headless)
-                    context = browser.new_context()
-                    page = context.new_page()
-                    page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
-                    page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                q.put({"type": "info", "message": "ใช้ T&V Session ที่ท่าน Login ไว้ในเบราว์เซอร์ (ไม่ส่งรหัสผ่านผ่านระบบ)"})
+                if not is_tv_logged_in(page):
+                    raise RuntimeError("TV_SESSION_EXPIRED")
 
-                    q.put({"type": "info", "message": "กำลังเข้าสู่ระบบเว็บ T&V..."})
-                    page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
-                    page.wait_for_selector('input[name="USER_NAME"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-                    page.wait_for_selector('input[name="USER_PASSWORD"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-                    page.fill('input[name="USER_NAME"]', username)
-                    page.fill('input[name="USER_PASSWORD"]', password)
-                    page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-                    page.wait_for_timeout(2_000)
-                    _assert_authenticated(page)
+                for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
+                    q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
+                    page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                    if not is_tv_logged_in(page):
+                        raise RuntimeError("TV_SESSION_EXPIRED")
+                    _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
 
-                    for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
-                        q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
-                        page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
-                        _assert_authenticated(page)
-                        _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
+                    q.put({"type": "info", "message": f"เลือก ปีงบประมาณ {portal_year}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
+                    select_by_value_js(page, 'select#PL_YAER', portal_year)
+                    _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
+                    select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
+                    page.wait_for_timeout(700)
+                    select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
+                    page.wait_for_timeout(700)
 
-                        q.put({"type": "info", "message": f"เลือก ปีงบประมาณ {portal_year}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
-                        select_by_value_js(page, 'select#PL_YAER', portal_year)
-                        _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
-                        select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
-                        page.wait_for_timeout(700)
-                        select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
-                        page.wait_for_timeout(700)
-
-                        for idx, rec in indexed_recs:
-                            try:
-                                _fill_record_row(page, rec, idx, q)
-                            except Exception as e_row:
-                                q.put({"type": "row_status", "index": idx, "status": "error",
-                                       "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
-                                try:
-                                    # Keep diagnostic screenshots transient and server-side only.
-                                    # Never publish portal screenshots under /static.
-                                    page.screenshot()
-                                    q.put({"type": "screenshot", "available": False,
-                                           "message": "ซ่อนภาพหน้าจอเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล"})
-                                    q.put({"type": "diagnostics", "index": idx, "details": _page_diagnostics(page)})
-                                except Exception as screenshot_exc:
-                                    q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {type(screenshot_exc).__name__}"})
-                                try:
-                                    if page.locator('#bizModal_402').is_visible():
-                                        page.keyboard.press('Escape')
-                                        page.wait_for_timeout(500)
-                                except Exception:
-                                    pass
-
-                        if approver:
-                            q.put({"type": "info", "message": f"กำลังเลือกผู้อนุมัติ: {approver}..."})
-                            _select_approver(page, approver)
-                            page.wait_for_timeout(800)
-
-                        _finish_plan(page, mode, q)
-
-                        if mode == 'dry_run' and g_idx == len(groups):
-                            q.put({"type": "info", "message": "Dry-run ครบทุกตำบล — เบราว์เซอร์จะเปิดค้างไว้ 3 นาทีเพื่อตรวจสอบ"})
-                            page.wait_for_timeout(180000)
-
-                    q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ!"})
-                    # Close while the sync_playwright context is still alive.
-                    # The context manager owns teardown after this block; calling
-                    # browser.close() later would produce "Event loop is closed".
-                    if browser is not None:
+                    for idx, rec in indexed_recs:
                         try:
-                            if browser.is_connected():
-                                browser.close()
-                        except Exception as close_exc:
-                            q.put({"type": "info", "message": f"ปิดเบราว์เซอร์ไม่สมบูรณ์: {close_exc}"})
-                        finally:
-                            browser = None
+                            _fill_record_row(page, rec, idx, q)
+                        except Exception as e_row:
+                            state = _page_diagnostics(page)
+                            if state.get("loginVisible"):
+                                raise RuntimeError("TV_SESSION_EXPIRED") from e_row
+                            q.put({"type": "row_status", "index": idx, "status": "error",
+                                   "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
+                            try:
+                                # Keep diagnostic screenshots transient and server-side only.
+                                # Never publish portal screenshots under /static.
+                                page.screenshot()
+                                q.put({"type": "screenshot", "available": False,
+                                       "message": "ซ่อนภาพหน้าจอเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล"})
+                                q.put({"type": "diagnostics", "index": idx, "details": state})
+                            except Exception as screenshot_exc:
+                                q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {type(screenshot_exc).__name__}"})
+                            try:
+                                if page.locator('#bizModal_402').is_visible():
+                                    page.keyboard.press('Escape')
+                                    page.wait_for_timeout(500)
+                            except Exception:
+                                pass
+
+                    if approver:
+                        q.put({"type": "info", "message": f"กำลังเลือกผู้อนุมัติ: {approver}..."})
+                        _select_approver(page, approver)
+                        page.wait_for_timeout(800)
+
+                    _finish_plan(page, mode, q)
+
+                if mode == 'dry_run':
+                    q.put({"type": "info", "message": "Dry-run ครบทุกตำบล — เบราว์เซอร์ยังเปิดค้างไว้ ตรวจสอบผลได้ทันที"})
+
+                q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ! (เบราว์เซอร์และ T&V Session ยังเปิดอยู่)"})
             except Exception as ex:
-                q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})
+                if "TV_SESSION_EXPIRED" in str(ex) or "AUTH_OR_SESSION_ERROR" in str(ex):
+                    q.put({"type": "error", "message": TV_SESSION_EXPIRED_MESSAGE})
+                else:
+                    q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})
             finally:
-                # sync_playwright() has already handled teardown on error.
-                # Do not call browser.close() after its event loop is stopped.
-                browser = None
-                _run_active = False
-                try:
-                    _run_lock.release()
-                except RuntimeError:
-                    pass
+                release_run_state()
                 q.put(None)
 
-        t = threading.Thread(target=run_playwright)
-        t.start()
+        if not _tv_session.submit_run(run_job, on_abort):
+            release_run_state()
+
+            def rejected_stream():
+                yield "data: " + json.dumps(
+                    {"type": "error", "message": TV_NOT_LOGGED_IN_ERROR},
+                    ensure_ascii=False,
+                ) + "\n\n"
+            yield from rejected_stream()
+            return
 
         try:
             while True:

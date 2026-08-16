@@ -4,6 +4,7 @@ import argparse
 import pandas as pd
 import re
 import json
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 PORTAL_LOGIN_URL = "https://tandv.doae.go.th/index/login_tv_system.php"
@@ -55,6 +56,33 @@ def _assert_authenticated(page):
     state = _page_diagnostics(page)
     if state.get("loginVisible") or "login" in str(state.get("url", "")).lower():
         raise RuntimeError(f"AUTHENTICATION_ERROR: {state}")
+
+
+def is_tv_logged_in(page):
+    """Check T&V login state from page content, not from the URL alone.
+
+    Mirrors app.py: logged in requires no visible login form, a non-login URL
+    path, and an authenticated-chrome marker. Never touches credentials.
+    """
+    try:
+        state = page.evaluate("""() => ({
+            urlPath: window.location.pathname || '',
+            loginVisible: Boolean(document.querySelector('input[name="USER_PASSWORD"]')),
+            authMarkers: Boolean(
+                document.querySelector('a[href*="logout"]')
+                || document.querySelector('a[href*="workflow"]')
+                || document.querySelector('#PL_YAER')
+                || document.querySelector('a[href*="main_tv_system"]')
+            ),
+        })""")
+    except Exception:
+        return False
+    if not isinstance(state, dict) or state.get('loginVisible'):
+        return False
+    path = str(state.get('urlPath') or '').lower()
+    if not path or 'login' in path:
+        return False
+    return bool(state.get('authMarkers'))
 
 
 def _wait_for_portal_ready(page, stage):
@@ -439,21 +467,10 @@ def main():
     parser = argparse.ArgumentParser(description="T&V Automation Script")
     parser.add_argument("--submit", action="store_true", help="Perform actual submission (otherwise runs dry-run)")
     parser.add_argument("--draft", action="store_true", help="Save as draft (บันทึกชั่วคราว)")
-    parser.add_argument("--username", help="T&V Portal Username (National ID)")
-    parser.add_argument("--password", help="T&V Portal Password")
     parser.add_argument("--sheet", default="มิ.ย.69", help="Excel sheet name to process")
     args = parser.parse_args()
-    
+
     import os
-    import getpass
-    
-    username = args.username or os.environ.get("TV_USERNAME")
-    password = args.password or os.environ.get("TV_PASSWORD")
-    
-    if not username:
-        username = input("Enter T&V Username (National ID): ").strip()
-    if not password:
-        password = getpass.getpass("Enter T&V Password: ").strip()
     
     xls_path = r"c:\Users\Admin\Downloads\tv_automation\แผนเดือนพค69.xls"
     sheet_name = args.sheet
@@ -557,23 +574,35 @@ def main():
     portal_year = resolve_portal_fiscal_year(year_num, month_num, records)
     
     print("\nLaunching browser (Headed)...")
+    # The user logs into T&V manually in the headed browser window; the script
+    # never handles the T&V username/password. The persistent profile keeps
+    # the session cookies on this machine only (gitignored, never uploaded).
+    profile_dir = os.environ.get(
+        "TV_BROWSER_PROFILE_DIR",
+        str(Path(__file__).resolve().parent / "data" / "browser-profile"),
+    )
+    os.makedirs(profile_dir, exist_ok=True)
+
     with sync_playwright() as p:
-        # Launch browser in headed mode so the user can verify visually
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context()
-        page = context.new_page()
+        # Headed persistent context so the user can log in and verify visually
+        context = p.chromium.launch_persistent_context(profile_dir, headless=False)
+        page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
         page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
-        
-        print("Logging in to T&V portal...")
-        page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
-        page.wait_for_selector('input[name="USER_NAME"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-        page.wait_for_selector('input[name="USER_PASSWORD"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-        page.fill('input[name="USER_NAME"]', username)
-        page.fill('input[name="USER_PASSWORD"]', password)
-        page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-        page.wait_for_timeout(2_000)
-        _assert_authenticated(page)
+
+        print("Opening T&V portal. Please log in manually in the browser window...")
+        try:
+            page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+        except Exception:
+            # An already-authenticated profile may redirect away from login.
+            pass
+
+        login_deadline = time.time() + 300  # up to 5 minutes for manual login
+        while not is_tv_logged_in(page):
+            if time.time() > login_deadline:
+                raise RuntimeError("TV_LOGIN_TIMEOUT: T&V login was not completed within 5 minutes")
+            time.sleep(2)
+        print("T&V login detected. Continuing with automation...")
         
         print("Navigating to Workflow 26 plan form...")
         page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
@@ -773,12 +802,10 @@ def main():
             
         # Close while sync_playwright is still active. On an exception the
         # context manager handles teardown; do not close after its event loop.
-        if browser is not None:
-            try:
-                if browser.is_connected():
-                    browser.close()
-            finally:
-                browser = None
+        try:
+            context.close()
+        except Exception:
+            print("Browser context was already closed.")
 
 if __name__ == "__main__":
     main()

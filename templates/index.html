@@ -71,8 +71,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
     <!-- ===== MAIN STYLESHEET ===== -->
-    <link rel="preload" as="style" href="/static/style.css?v=area3">
-    <link rel="stylesheet" href="/static/style.css?v=area3">
+    <link rel="preload" as="style" href="/static/style.css?v=tvlogin1">
+    <link rel="stylesheet" href="/static/style.css?v=tvlogin1">
     <link rel="stylesheet" href="/static/auth.css?v=invite-redis1">
 
     <!-- ===== SCHEMA.ORG STRUCTURED DATA (JSON-LD) ===== -->
@@ -456,24 +456,23 @@
     <section class="glass-card">
         <span class="step-badge">Step 2</span>
         <h2 class="csp-section-heading csp-heading-spaced">
-            การตั้งค่าและบัญชีเข้าระบบ DOAE T&V
+            เข้าสู่ระบบ DOAE T&V และตั้งค่าการทำงาน
         </h2>
         
-        <div class="form-grid">
-            <div class="form-control-wrapper">
-                <label for="username">ชื่อผู้ใช้งาน (รหัสบัตรประชาชน)</label>
-                <input type="text" id="username" class="form-input" value="" placeholder="บัญชี T&V ของท่าน (เช่น เลขบัตรประชาชน)" autocomplete="username">
-                <span id="username-error" class="validation-msg"></span>
-                <span class="field-hint">ใช้บัญชีของท่านเอง — เก็บเฉพาะในหน่วยความจำของแท็บระหว่างการทำงาน</span>
+        <div class="tv-session-panel" id="tv-session-panel">
+            <div class="tv-session-info">
+                <span id="tv-status-chip" class="tv-status-chip tv-status-unknown">T&V: กำลังตรวจสอบ...</span>
+                <span class="field-hint" id="tv-status-hint">
+                    Login T&V ด้วยบัญชีของท่านเองในหน้าต่างเบราว์เซอร์ — ระบบนี้ไม่รับและไม่เก็บรหัสผ่าน T&V
+                </span>
             </div>
-            
-            <div class="form-control-wrapper">
-                <label for="password">รหัสผ่านบัญชี T&V ของท่าน</label>
-                <input type="password" id="password" class="form-input" value="" placeholder="รหัสผ่านของท่านเอง (ไม่แชร์)" autocomplete="current-password">
-                <span id="password-error" class="validation-msg"></span>
-                <span class="field-hint">แต่ละคนใช้บัญชีของตนเอง — ระบบไม่เก็บรหัสผ่านถาวร</span>
+            <div class="tv-session-actions">
+                <button id="tv-login-btn" class="btn-secondary" type="button">🔐 Login T&V (เปิดเบราว์เซอร์)</button>
+                <button id="tv-refresh-btn" class="btn-secondary" type="button">🔄 ตรวจสอบสถานะ</button>
             </div>
+        </div>
 
+        <div class="form-grid">
             <div class="form-control-wrapper">
                 <label for="sheet-select">แผ่นงาน (เดือนแผนงาน)</label>
                 <select id="sheet-select" class="form-input" data-csp-change="onSheetChange">
@@ -490,12 +489,6 @@
 
         <div class="csp-plan-header">
             <div class="csp-mode-controls">
-                <label class="toggle-switch-wrapper">
-                    <input type="checkbox" id="headless" checked>
-                    <span class="toggle-btn"></span>
-                    <span>ซ่อนหน้าต่างเบราว์เซอร์อัตโนมัติ (Headless)</span>
-                </label>
-                
                 <div class="form-control-wrapper csp-inline-controls">
                     <span class="csp-mode-label">โหมดทำงาน:</span>
                     <div class="mode-segmented-control">
@@ -521,7 +514,7 @@
                 </div>
             </div>
             
-            <button id="start-btn" class="btn-glow">
+            <button id="start-btn" class="btn-glow" disabled title="ต้อง Login T&V ก่อนเริ่ม Automation">
                 ⚡ เริ่มกรอกข้อมูลเข้าระบบ T&V
             </button>
         </div>
@@ -655,7 +648,7 @@
                     <div class="manual-step-num">4</div>
                     <div class="manual-step-content">
                         <h4>ขั้นที่ 4: ตั้งค่าบัญชี T&V และกดเริ่มกรอก</h4>
-                        <p>กรอก Username / Password บัญชี T&V ของคุณ เลือกผู้อนุมัติ เลือกโหมด (แนะนำ <strong>Dry-run</strong> ในครั้งแรกเพื่อทดสอบ) แล้วกด <strong>「เริ่มกรอกข้อมูลเข้าระบบ T&V」</strong></p>
+                        <p>กด <strong>「Login T&V (เปิดเบราว์เซอร์)」</strong> แล้ว Login ด้วยบัญชี T&V ของคุณเองในหน้าต่างที่เปิดขึ้น (ระบบไม่รับและไม่เก็บรหัสผ่าน) เลือกผู้อนุมัติ เลือกโหมด (แนะนำ <strong>Dry-run</strong> ในครั้งแรกเพื่อทดสอบ) แล้วกด <strong>「เริ่มกรอกข้อมูลเข้าระบบ T&V」</strong></p>
                     </div>
                 </div>
 
@@ -705,7 +698,7 @@
 
     <script src="/static/auth.js?v=invite-redis2"></script>
     <script src="/static/csp-bindings.js?v=csp1"></script>
-    <script src="/static/app.js?v=fiscal-year1"></script>
+    <script src="/static/app.js?v=tvlogin1"></script>
 
 </body>
 </html>
