@@ -176,6 +176,37 @@ def parse_date_to_be(date_str, month_num, year_num):
     day = int(match.group(1))
     return f"{day:02d}/{month_num:02d}/{year_num}"
 
+
+def thai_fiscal_year_be(calendar_year_be, month_num):
+    year = int(calendar_year_be)
+    month = int(month_num)
+    if month >= 10:
+        return year + 1
+    return year
+
+
+def calendar_year_be_for_fiscal_sheet(sheet_year_be, month_num):
+    year = int(sheet_year_be)
+    month = int(month_num)
+    if month >= 10:
+        return year - 1
+    return year
+
+
+def resolve_portal_fiscal_year(sheet_year_be, month_num, records=None):
+    for rec in records or []:
+        text = str(rec.get("date") or "").strip()
+        match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", text)
+        if not match:
+            continue
+        cal_be = int(match.group(3))
+        mon = int(match.group(2))
+        if cal_be < 2400:
+            continue
+        return str(thai_fiscal_year_be(cal_be, mon))
+    return str(int(sheet_year_be))
+
+
 # Parse sheet name (e.g. "มิ.ย.69" -> Year 2569, Month value 69, Month number 6)
 def parse_sheet_name(sheet_name):
     # Normalize sheet name
@@ -432,8 +463,9 @@ def main():
     except Exception as e_sheet:
         print(f"Error parsing sheet name: {e_sheet}")
         sys.exit(1)
+    calendar_year = calendar_year_be_for_fiscal_sheet(year_num, month_num)
         
-    print(f"Reading Excel sheet: {sheet_name} (Year {year_num}, Month Number {month_num}, Portal Value {portal_month_val})...")
+    print(f"Reading Excel sheet: {sheet_name} (Fiscal Year {year_num}, Month Number {month_num}, Portal Value {portal_month_val})...")
     xl = pd.ExcelFile(xls_path)
     df = xl.parse(sheet_name)
     
@@ -463,7 +495,7 @@ def main():
         if not date_str and not activity:
             continue
             
-        be_date = parse_date_to_be(date_str, month_num, year_num)
+        be_date = parse_date_to_be(date_str, month_num, calendar_year)
         if not be_date:
             print(f"Warning: Could not parse date '{date_str}' at row {idx+1}. Skipping.")
             continue
@@ -522,6 +554,7 @@ def main():
         })
         
     print(f"Loaded {len(records)} records from Excel sheet.")
+    portal_year = resolve_portal_fiscal_year(year_num, month_num, records)
     
     print("\nLaunching browser (Headed)...")
     with sync_playwright() as p:
@@ -548,8 +581,8 @@ def main():
         _wait_for_portal_ready(page, "workflow_26")
         
         # 1. Fill Main Page Header Fields using JS to bypass Select2 hiding
-        print(f"Selecting Year {year_num}...")
-        select_by_value_js(page, 'select#PL_YAER', str(year_num))
+        print(f"Selecting Fiscal Year {portal_year}...")
+        select_by_value_js(page, 'select#PL_YAER', str(portal_year))
         _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
         
         print(f"Selecting Month from sheet (value={portal_month_val})...")

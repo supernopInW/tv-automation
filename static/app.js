@@ -71,12 +71,22 @@ const thaiPlanMonthAbbr = [
     'กค', 'สค', 'กย', 'ตค', 'พย', 'ธค'
 ];
 
+/** Thai fiscal year (ต.ค.–ก.ย.): Oct–Dec calendar BE belong to next fiscal BE year. */
+function thaiFiscalYearBe(calendarYearBe, month) {
+    const year = Number(calendarYearBe);
+    const mon = Number(month);
+    if (!Number.isFinite(year) || !Number.isFinite(mon)) return year;
+    return mon >= 10 ? year + 1 : year;
+}
+
 function planMonthToSheetName(planMonth) {
     const match = /^(\d{4})-(\d{2})$/.exec(String(planMonth || ''));
     if (!match) return '';
     const month = parseInt(match[2], 10);
     if (month < 1 || month > 12) return '';
-    const yearBeShort = String(parseInt(match[1], 10) + 543).slice(-2);
+    const calendarBe = parseInt(match[1], 10) + 543;
+    const fiscalBe = thaiFiscalYearBe(calendarBe, month);
+    const yearBeShort = String(fiscalBe).slice(-2);
     return `${thaiPlanMonthAbbr[month - 1]}${yearBeShort}`;
 }
 

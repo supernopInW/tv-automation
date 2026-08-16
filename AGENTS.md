@@ -398,7 +398,15 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - A duplicate Flask route block exposed by the combined files was removed; the four test suites pass with 25 tests. No T&V credentials were used and no Draft/Submit operation was performed.
 
 
-## 33. Multi-user app auth + invite (2026-08-16)
+## 34. Fiscal-year auto mapping (2026-08-16)
+
+- ปีงบประมาณไทย = ต.ค.–ก.ย.; ต.ค.–ธ.ค. ของปีปฏิทิน พ.ศ. Y อยู่ในปีงบ Y+1
+- `planMonthToSheetName` ใส่เลขท้ายชีตเป็นปีงบ (เช่น ต.ค. 2025 → `ตค69`)
+- โหลด Excel: วันที่ไม่มีปีชัดเจนใช้ปีปฏิทินจากปีงบในชื่อชีต (`calendar_year_be_for_fiscal_sheet`)
+- ตอนรัน Workflow 26: `#PL_YAER` ใช้ `resolve_portal_fiscal_year` (ดูวันที่ในแถวก่อน แล้วค่อยเลขท้ายชีต)
+- `_month_name_thai_from_sheet` ใช้ `parse_sheet_name` เพื่อรองรับชื่อเต็ม เช่น `ตุลาคม69`
+- ทดสอบ: `test_fiscal_year.py`
+
 
 - เพิ่ม `user_auth.py` เก็บผู้ใช้/invite ใน **Redis** (`APP_USER_REDIS_URI` หรือ fallback `RATELIMIT_STORAGE_URI`; `memory://` สำหรับ local/test)
 - Bootstrap admin จาก `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD_HASH`; ผู้ใช้ที่รับเชิญใช้ ACL ร่วมจาก env (role/office/tambons/approvers)

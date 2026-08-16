@@ -593,6 +593,39 @@ def parse_date_to_be(date_str, month_num, year_num):
     return f"{day:02d}/{month_num:02d}/{year_num}"
 
 
+def thai_fiscal_year_be(calendar_year_be, month_num):
+    """Thai government fiscal year (ต.ค.–ก.ย.). Oct–Dec belong to the next BE year."""
+    year = int(calendar_year_be)
+    month = int(month_num)
+    if month >= 10:
+        return year + 1
+    return year
+
+
+def calendar_year_be_for_fiscal_sheet(sheet_year_be, month_num):
+    """DOAE sheet suffixes are fiscal years; map to calendar BE for row dates."""
+    year = int(sheet_year_be)
+    month = int(month_num)
+    if month >= 10:
+        return year - 1
+    return year
+
+
+def resolve_portal_fiscal_year(sheet_year_be, month_num, records=None):
+    """Pick #PL_YAER: prefer calendar year from plan dates, else sheet fiscal year."""
+    for rec in records or []:
+        text = str(rec.get('date') or '').strip()
+        match = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', text)
+        if not match:
+            continue
+        cal_be = int(match.group(3))
+        mon = int(match.group(2))
+        if cal_be < 2400:
+            continue
+        return str(thai_fiscal_year_be(cal_be, mon))
+    return str(int(sheet_year_be))
+
+
 def be_date_to_gregorian(be_date):
     """Parse DD/MM/YYYY (Buddhist Era) → datetime.date or None."""
     from datetime import date
@@ -1110,6 +1143,7 @@ def load_visit_plan_records(df, header_row, sheet_name, office_name=None, defaul
         year_num, portal_month_val, month_num = parse_sheet_name(sheet_name)
     except Exception:
         year_num, portal_month_val, month_num = "2569", "71", 8
+    calendar_year = calendar_year_be_for_fiscal_sheet(year_num, month_num)
 
     headers = [str(c).strip() for c in df.iloc[header_row].tolist()]
     col_date = _find_col(headers, "วัน", "วันที่")
@@ -1144,10 +1178,10 @@ def load_visit_plan_records(df, header_row, sheet_name, office_name=None, defaul
         if not activity:
             continue
 
-        dates = parse_visit_plan_dates(date_str, month_num, int(year_num))
+        dates = parse_visit_plan_dates(date_str, month_num, calendar_year)
         if not dates:
             # fallback: first number as day in sheet month
-            be = parse_date_to_be(thai_to_arabic(date_str), month_num, int(year_num))
+            be = parse_date_to_be(thai_to_arabic(date_str), month_num, calendar_year)
             dates = [be] if be else []
         if not dates:
             continue
@@ -1188,6 +1222,7 @@ def load_excel_records(xls_path, sheet_name="มิ.ย.69", office_name=None, d
         year_num, portal_month_val, month_num = parse_sheet_name(sheet_name, xls_path=xls_path)
     except Exception as ex:
         year_num, portal_month_val, month_num = "2569", "69", 6
+    calendar_year = calendar_year_be_for_fiscal_sheet(year_num, month_num)
 
     xl = pd.ExcelFile(xls_path)
     df = xl.parse(sheet_name)
@@ -1236,9 +1271,9 @@ def load_excel_records(xls_path, sheet_name="มิ.ย.69", office_name=None, d
             continue
 
         # Expand Thai day ranges (เช่น ๕-๗ ส.ค. ๖๙) into multiple rows
-        dates = parse_visit_plan_dates(date_str, month_num, int(year_num))
+        dates = parse_visit_plan_dates(date_str, month_num, calendar_year)
         if not dates:
-            be_one = parse_date_to_be(date_str, month_num, int(year_num))
+            be_one = parse_date_to_be(date_str, month_num, calendar_year)
             dates = [be_one] if be_one else []
         if not dates:
             continue
@@ -1748,18 +1783,16 @@ def get_historical_activities():
 
 
 def _month_name_thai_from_sheet(sheet_name):
-    month_name_thai = "มิถุนายน"
-    normalized_sheet = sheet_name.replace(" ", "").replace(".", "")
-    match_month = re.match(r"^([ก-๙]+)", normalized_sheet)
-    if match_month:
-        month_part = match_month.group(1)
-        month_name_map = {
-            "มค": "มกราคม", "กพ": "กุมภาพันธ์", "มีค": "มีนาคม", "เมย": "เมษายน",
-            "พค": "พฤษภาคม", "มิย": "มิถุนายน", "กค": "กรกฎาคม", "สค": "สิงหาคม",
-            "กย": "กันยายน", "ตค": "ตุลาคม", "พย": "พฤศจิกายน", "ธค": "ธันวาคม"
-        }
-        month_name_thai = month_name_map.get(month_part, "มิถุนายน")
-    return month_name_thai
+    try:
+        _, _, month_num = parse_sheet_name(sheet_name)
+    except Exception:
+        month_num = 6
+    month_name_map = {
+        1: "มกราคม", 2: "กุมภาพันธ์", 3: "มีนาคม", 4: "เมษายน",
+        5: "พฤษภาคม", 6: "มิถุนายน", 7: "กรกฎาคม", 8: "สิงหาคม",
+        9: "กันยายน", 10: "ตุลาคม", 11: "พฤศจิกายน", 12: "ธันวาคม",
+    }
+    return month_name_map.get(int(month_num), "มิถุนายน")
 
 
 def _group_records_by_tambon(records, default_tambon, role):
@@ -2026,6 +2059,7 @@ def run_automation():
         year_num, portal_month_val, month_num = parse_sheet_name(sheet_name, records=records)
     except Exception as ex:
         year_num, portal_month_val, month_num = "2569", "69", 6
+    portal_year = resolve_portal_fiscal_year(year_num, month_num, records)
 
     month_name_thai = _month_name_thai_from_sheet(sheet_name)
     groups = _group_records_by_tambon(records, tambon, role)
@@ -2062,8 +2096,8 @@ def run_automation():
                         _assert_authenticated(page)
                         _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
 
-                        q.put({"type": "info", "message": f"เลือก ปี {year_num}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
-                        select_by_value_js(page, 'select#PL_YAER', year_num)
+                        q.put({"type": "info", "message": f"เลือก ปีงบประมาณ {portal_year}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
+                        select_by_value_js(page, 'select#PL_YAER', portal_year)
                         _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
                         select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
                         page.wait_for_timeout(700)
