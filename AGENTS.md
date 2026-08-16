@@ -48,6 +48,7 @@
 ```text
 tv_automation/
 ├── AGENTS.md                  # 👈 [ไฟล์นี้] คู่มือและบริบทสำหรับ AI Agents (ต้องอัปเดตเสมอ)
+├── CURSOR_CONTEXT.md          # บริบทรวมสำหรับ Cursor (security, Render, a11y, workflow)
 ├── README.md                  # คู่มือโปรเจกต์ระดับผู้ใช้/ผู้พัฒนาทั่วไป
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
@@ -393,3 +394,14 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - `origin/main` advanced to `16f02dd` with overlapping P0/P1 auth, CSRF, upload, rate-limit and test changes; PR #4 was 12 commits ahead and 1 commit behind, causing conflicts in workflow, app, frontend, template, requirements and tests.
 - Resolution kept the PR's fail-closed `APP_AUTH_REQUIRED=1` profile/ACL, local rules-only parser with no Gemini integration, CSP nonce/delegated bindings, exact dependency pins, Docker validation and CodeQL scope. The older opt-in auth/Gemini blocks from main were not reintroduced.
 - A duplicate Flask route block exposed by the combined files was removed; the four test suites pass with 25 tests. No T&V credentials were used and no Draft/Submit operation was performed.
+
+
+## 31. Cursor handoff จาก Manus (2026-08-16)
+
+- Local workspace ถูก `git pull` จาก `f05f509` → `e818d5f` (PR #4 squash merge: CSP Enforce + security hardening) ให้ตรงกับ `origin/main`
+- นำเข้าเอกสาร handoff: `CURSOR_CONTEXT.md` (บริบทหลักสำหรับ Cursor), `docs/render_handoff_findings.md` (สถานะ Render), `docs/RENDER_PHASE1_CHECKLIST.md` (ขั้นตอนตั้ง env บน Render)
+- Render live URL: `https://tv-automation.onrender.com` (service `srv-d9o5jvlaeets73d4tfp0`). Deploy attempt ของ `e818d5f` ล้มด้วย `Production authorization profile is not configured`; health ที่ยัง `ok` อาจเป็น instance เก่า — ห้ามสรุปว่า `e818d5f` ขึ้น live สำเร็จจนกว่าจะตั้ง `APP_AUTH_ROLE`, `APP_AUTH_OFFICE_NAME`, `APP_AUTH_ALLOWED_TAMBONS`, `APP_AUTH_ALLOWED_APPROVERS` และ Redis Internal URL ครบแล้ว redeploy
+- Production source คือ repository root เท่านั้น; `Ready_For_GitHub/` และ `Upload_To_GitHub/` เป็น archive ไม่ใช่เส้นทาง deploy อัตโนมัติ
+- คง `APP_AUTH_CAN_SUBMIT=0`; ห้าม Draft/Submit / portal mutation ระหว่างทดสอบ; ห้ามลด security guards เพื่อให้ deploy ผ่าน
+- Offline verification หลัง pull: `node --check` ของ `auth.js`/`app.js`/`csp-bindings.js`, `py_compile`, security headers/hardening/selector tests, และ `scripts/security_check.py` ผ่าน 14/14 (local ยังไม่มี auth secrets จึงมี warning `APP_AUTH_REQUIRED=1 but authentication secrets are not configured` และ `memory://` ซึ่งถูกต้องสำหรับ development)
+- งานถัดไป: ผู้ใช้ตั้ง Render Environment ตาม `docs/RENDER_PHASE1_CHECKLIST.md` → Save/Deploy → ตรวจ logs + `/api/health` + `/api/access/status` + login แอป → จากนั้นค่อย smoke `dry_run` และงาน a11y ใน branch แยก

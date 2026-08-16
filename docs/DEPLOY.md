@@ -39,6 +39,15 @@ RATELIMIT_STORAGE_URI=redis://<redis-host>:<port>/<db>
 
 เมื่อ `APP_AUTH_REQUIRED=1` ระบบจะ derive role, office, allowed tambons, approvers และสิทธิ์ submit จาก server-side profile แทนค่าที่ client ส่งมา หาก profile ไม่ครบหรือใช้ `memory://` ใน production ระบบต้อง fail closed และไม่ควรเริ่มให้บริการสาธารณะ
 
+### Render.com (production ปัจจุบัน)
+
+- Live URL: `https://tv-automation.onrender.com`
+- Checklist ตั้งค่า env / redeploy: [`docs/RENDER_PHASE1_CHECKLIST.md`](RENDER_PHASE1_CHECKLIST.md)
+- สถานะ deploy ล่าสุดจาก handoff: [`docs/render_handoff_findings.md`](render_handoff_findings.md)
+- บริบทรวมสำหรับ Cursor: [`CURSOR_CONTEXT.md`](../CURSOR_CONTEXT.md)
+
+อย่าลด production guards เพื่อให้ deploy ผ่าน — แก้ Environment Variables ให้ครบแล้ว Save/Deploy
+
 ---
 
 ## 2. วิธี Deploy บน Hugging Face Spaces (ฟรี Cloud Hosting)
