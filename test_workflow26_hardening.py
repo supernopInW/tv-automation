@@ -48,23 +48,137 @@ def test_finalize_confirmed_by_portal_marker():
     assert result["confirmed"] is True
 
 
-def test_run_rejects_missing_credentials_without_starting_browser():
-    old_required = app.APP_AUTH_REQUIRED
-    app.APP_AUTH_REQUIRED = False
-    try:
+class _run_route_test_env:
+    """Disable app auth and the shared rate limiter for one offline test.
+
+    The /api/run limit (2 per 10 minutes) would otherwise reject the third
+    request in this suite before the code under test is reached.
+    """
+
+    def __enter__(self):
+        self._old_required = app.APP_AUTH_REQUIRED
+        self._old_limiter_enabled = app.limiter.enabled
+        app.APP_AUTH_REQUIRED = False
+        app.limiter.enabled = False
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        app.APP_AUTH_REQUIRED = self._old_required
+        app.limiter.enabled = self._old_limiter_enabled
+        return False
+
+
+class FakeTvSession:
+    def __init__(self, running, logged_in):
+        self._running = running
+        self._logged_in = logged_in
+
+    def status(self):
+        return {"running": self._running, "logged_in": self._logged_in, "message": ""}
+
+    def last_status(self):
+        return self.status()
+
+    def is_running(self):
+        return self._running
+
+    def submit_run(self, job, on_abort):
+        return False
+
+
+def test_run_rejects_tv_credentials_in_body():
+    """/api/run must refuse any payload that still carries T&V credentials."""
+    with _run_route_test_env():
         client = app.app.test_client()
         csrf = client.get("/api/access/status").get_json()["csrf_token"]
         response = client.post(
             "/api/run",
-            json={"records": [], "mode": "dry_run"},
+            json={"records": [], "mode": "dry_run", "username": "x", "password": "y"},
             headers={"X-CSRF-Token": csrf},
         )
         assert response.status_code == 400
         payload = response.get_json()
         assert payload["success"] is False
-        assert "รหัสผ่าน" in payload["error"]
+        assert "ไม่รับ" in payload["error"]
+
+
+def test_run_requires_logged_in_tv_session():
+    old_available = app._local_headed_available
+    old_session = app._tv_session
+    app._local_headed_available = lambda: True
+    app._tv_session = FakeTvSession(running=True, logged_in=False)
+    try:
+        with _run_route_test_env():
+            client = app.app.test_client()
+            csrf = client.get("/api/access/status").get_json()["csrf_token"]
+            response = client.post(
+                "/api/run",
+                json={"records": [], "mode": "dry_run"},
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert response.status_code == 409
+            payload = response.get_json()
+            assert payload["success"] is False
+            assert payload["error"] == app.TV_NOT_LOGGED_IN_ERROR
     finally:
-        app.APP_AUTH_REQUIRED = old_required
+        app._local_headed_available = old_available
+        app._tv_session = old_session
+
+
+def test_run_refuses_on_headless_server():
+    old_available = app._local_headed_available
+    app._local_headed_available = lambda: False
+    try:
+        with _run_route_test_env():
+            client = app.app.test_client()
+            csrf = client.get("/api/access/status").get_json()["csrf_token"]
+            response = client.post(
+                "/api/run",
+                json={"records": [], "mode": "dry_run"},
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert response.status_code == 503
+            payload = response.get_json()
+            assert payload["success"] is False
+            assert payload["error"] == app.TV_BROWSER_LOCAL_ONLY_ERROR
+    finally:
+        app._local_headed_available = old_available
+
+
+def test_is_tv_logged_in_heuristics():
+    login_form_page = FakePage({
+        "urlPath": "/index/login_tv_system.php",
+        "loginVisible": True,
+        "authMarkers": False,
+    })
+    assert app.is_tv_logged_in(login_form_page) is False
+
+    login_url_page = FakePage({
+        "urlPath": "/index/login_tv_system.php",
+        "loginVisible": False,
+        "authMarkers": True,
+    })
+    assert app.is_tv_logged_in(login_url_page) is False
+
+    no_marker_page = FakePage({
+        "urlPath": "/index/main_tv_system.php",
+        "loginVisible": False,
+        "authMarkers": False,
+    })
+    assert app.is_tv_logged_in(no_marker_page) is False
+
+    authenticated_page = FakePage({
+        "urlPath": "/workflow/workflow_start.php",
+        "loginVisible": False,
+        "authMarkers": True,
+    })
+    assert app.is_tv_logged_in(authenticated_page) is True
+
+    class BrokenPage:
+        def evaluate(self, script, *args):
+            raise RuntimeError("page closed")
+
+    assert app.is_tv_logged_in(BrokenPage()) is False
 
 
 def test_diagnostics_never_include_password():
@@ -102,7 +216,10 @@ if __name__ == "__main__":
     tests = [
         test_finalize_unknown_without_success_marker,
         test_finalize_confirmed_by_portal_marker,
-        test_run_rejects_missing_credentials_without_starting_browser,
+        test_run_rejects_tv_credentials_in_body,
+        test_run_requires_logged_in_tv_session,
+        test_run_refuses_on_headless_server,
+        test_is_tv_logged_in_heuristics,
         test_diagnostics_never_include_password,
         test_modal_dynamic_selects_are_reapplied_after_generic_events,
         test_modal_dates_are_set_after_generic_events_in_both_paths,

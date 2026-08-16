@@ -5,6 +5,9 @@ __pycache__/
 .env
 .env.*
 uploads/
+# Persistent Chromium profile with the officer's T&V session cookies.
+# Sensitive: keep local only, never commit or upload.
+data/browser-profile/
 static/err_*.png
 static/error_screenshot.png
 scripts/_sample_village.json

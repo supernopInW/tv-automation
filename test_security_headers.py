@@ -10,11 +10,24 @@ from werkzeug.security import generate_password_hash
 # remains fail-closed in the application runtime.
 os.environ['APP_ENV'] = 'test'
 os.environ['RATELIMIT_STORAGE_URI'] = 'memory://'
+os.environ['APP_USER_REDIS_URI'] = 'memory://'
 os.environ['APP_SESSION_SECRET'] = 'test-only-session-secret'
 
 
 import app as app_module
+import user_auth
 from app import app
+
+
+def _bootstrap_test_user(username, password):
+    user_auth.reset_for_tests()
+    user_auth.configure('memory://')
+    app_module.app._user_store_ready = False
+    password_hash = generate_password_hash(password)
+    app_module.APP_AUTH_USERNAME = username
+    app_module.APP_AUTH_PASSWORD_HASH = password_hash
+    user_auth.bootstrap_admin(username, password_hash)
+    return password_hash
 
 
 def _csrf_token(client):
@@ -78,8 +91,7 @@ def test_protected_endpoint_requires_app_session_when_auth_enabled():
     old_hash = app_module.APP_AUTH_PASSWORD_HASH
     try:
         app_module.APP_AUTH_REQUIRED = True
-        app_module.APP_AUTH_USERNAME = 'security-test-user'
-        app_module.APP_AUTH_PASSWORD_HASH = generate_password_hash('security-test-password')
+        _bootstrap_test_user('security-test-user', 'security-test-password')
         client = app.test_client()
         response = client.get('/api/records')
         assert response.status_code == 401
@@ -96,8 +108,7 @@ def test_auth_login_and_mutation_require_csrf_token():
     old_hash = app_module.APP_AUTH_PASSWORD_HASH
     try:
         app_module.APP_AUTH_REQUIRED = True
-        app_module.APP_AUTH_USERNAME = 'security-test-user'
-        app_module.APP_AUTH_PASSWORD_HASH = generate_password_hash('security-test-password')
+        _bootstrap_test_user('security-test-user', 'security-test-password')
         client = app.test_client()
         csrf = _csrf_token(client)
 
@@ -241,6 +252,17 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert "localStorage.getItem('tv_username'" not in source
     assert "sessionStorage.setItem('tv_password'" not in source
     assert "sessionStorage.getItem('tv_password'" not in source
+    # The frontend must never read or send T&V credentials to /api/run;
+    # the officer logs into T&V manually in the Playwright browser instead.
+    assert "getElementById('username')" not in source
+    assert "getElementById('password')" not in source
+    assert '/api/tv-browser/status' in source
+    assert '/api/tv-browser/start' in source
+    # The backend must never fill the portal login form on the user's behalf.
+    assert "page.fill('input[name=\"USER_PASSWORD\"]'" not in backend_source
+    assert "page.fill('input[name=\"USER_PASSWORD\"]'" not in cli_source
+    assert 'TV_PASSWORD' not in cli_source
+    assert 'getpass' not in cli_source
     with open('templates/index.html', encoding='utf-8') as handle:
         template_source = handle.read()
     with open('requirements.txt', encoding='utf-8') as handle:
@@ -250,6 +272,10 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert 'gemini' not in backend_source.lower()
     assert 'google-genai' not in requirements_source.lower()
     assert 'gemini' not in template_source.lower()
+    # No T&V credential inputs in the dashboard; only the login-status panel.
+    assert 'id="username"' not in template_source
+    assert 'id="password"' not in template_source
+    assert 'id="tv-status-chip"' in template_source
     assert "localStorage.setItem('gemini_api_key'" not in source
     assert "localStorage.getItem('gemini_api_key'" not in source
     assert '/static/${shot_name}' not in backend_source

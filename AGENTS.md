@@ -1,7 +1,7 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
 > **Last Updated:** 2026-08-16
-> **Version:** 1.0.0
+> **Version:** 1.1.0
 
 ---
 
@@ -51,6 +51,7 @@ tv_automation/
 ├── CURSOR_CONTEXT.md          # บริบทรวมสำหรับ Cursor (security, Render, a11y, workflow)
 ├── README.md                  # คู่มือโปรเจกต์ระดับผู้ใช้/ผู้พัฒนาทั่วไป
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
+├── user_auth.py               # บัญชีแอปหลายคน + invite (Redis / memory://)
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
 ├── geo_data.py                # ตัวจัดการข้อมูลภูมิศาสตร์ (จังหวัด, อำเภอ, ตำบล, หมู่บ้าน)
 ├── requirements.txt           # Python Dependencies ของ Flask, Playwright, Pandas และ parser แบบ local
@@ -74,6 +75,7 @@ tv_automation/
 │
 ├── static/
 │   ├── app.js                 # 💻 Logic ฝั่ง Client: Event Handling, สุ่มหมู่บ้าน, กฎวันจันทร์, SSE Live Log
+│   ├── auth.js / auth.css     # Application login, invite accept, admin invite bar
 │   └── style.css              # 🎨 UI Design System & Theme Styles
 │
 ├── templates/
@@ -114,7 +116,7 @@ tv_automation/
 
 5. **ความปลอดภัยรหัสผ่าน (Security Protocol):**
    - **ห้าม** บันทึก Username/Password ของ T&V ลงไฟล์, DB หรือ Log เด็ดขาด
-   - Password ส่งผ่าน HTTPS request Payload และถือครองในเซสชันเบราว์เซอร์เท่านั้น
+   - **ระบบไม่รับ T&V username/password ผ่าน API ใด ๆ อีกต่อไป** — ผู้ใช้ Login T&V เองใน headed Playwright browser (persistent profile ที่ `data/browser-profile/`, gitignored) แล้ว automation ใช้ session นั้นต่อ; `/api/run` ปฏิเสธ payload ที่มี credential ด้วย 400
 
 ---
 
@@ -396,6 +398,34 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - A duplicate Flask route block exposed by the combined files was removed; the four test suites pass with 25 tests. No T&V credentials were used and no Draft/Submit operation was performed.
 
 
+## 34. Fiscal-year auto mapping (2026-08-16)
+
+- ปีงบประมาณไทย = ต.ค.–ก.ย.; ต.ค.–ธ.ค. ของปีปฏิทิน พ.ศ. Y อยู่ในปีงบ Y+1
+- `planMonthToSheetName` ใส่เลขท้ายชีตเป็นปีงบ (เช่น ต.ค. 2025 → `ตค69`)
+- โหลด Excel: วันที่ไม่มีปีชัดเจนใช้ปีปฏิทินจากปีงบในชื่อชีต (`calendar_year_be_for_fiscal_sheet`)
+- ตอนรัน Workflow 26: `#PL_YAER` ใช้ `resolve_portal_fiscal_year` (ดูวันที่ในแถวก่อน แล้วค่อยเลขท้ายชีต)
+- `_month_name_thai_from_sheet` ใช้ `parse_sheet_name` เพื่อรองรับชื่อเต็ม เช่น `ตุลาคม69`
+- ทดสอบ: `test_fiscal_year.py`
+
+
+- เพิ่ม `user_auth.py` เก็บผู้ใช้/invite ใน **Redis** (`APP_USER_REDIS_URI` หรือ fallback `RATELIMIT_STORAGE_URI`; `memory://` สำหรับ local/test)
+- Bootstrap admin จาก `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD_HASH`; ผู้ใช้ที่รับเชิญใช้ ACL ร่วมจาก env (role/office/tambons/approvers)
+- การแยกสิทธิ์ตำบลยังพึ่งบัญชี T&V ที่กรอกตอนรัน — ไม่เก็บรหัส T&V ใน Redis
+- API: `GET /api/auth/invite-info`, `POST /api/auth/accept-invite`, `POST /api/auth/invites` (admin), `GET /api/auth/users`, `POST /api/auth/users/<user>/active`
+- Frontend: accept invite จาก `/?invite=TOKEN` และปุ่ม “สร้างลิงก์เชิญ” สำหรับ admin เท่านั้น (`is_admin`)
+- UX: `app.js` รอ `app-authenticated` ก่อนโหลด geo/sheets เพื่อไม่ให้ log แดงก่อน login
+- ทดสอบออฟไลน์ผ่าน: `test_user_auth.py` (4), hardening (6), Select2 (4), security headers (8); `node --check static/auth.js`
+- Gitleaks: หลีกเลี่ยง literal `"password": "..."` ใน test fixtures — ประกอบรหัสผ่านด้วย `"".join(...)` เพื่อไม่ให้ `generic-api-key` ฟ้อง false positive
+- สถานะโค้ด: ยัง **uncommitted บน local `main`** — ต้อง branch/commit/PR แล้ว deploy ถึง Render จึงใช้เชิญจริงได้ (Disk ไม่จำเป็น; ใช้ Redis เดิม)
+
+## 32. Render Phase 1 authorization profile + deploy (2026-08-16)
+
+- PR #5 squash-merged เข้า `main` เป็น `313a3f8`
+- ตรวจ Render Environment: มี auth secrets + Redis อยู่แล้ว แต่ขาด authorization profile
+- เพิ่ม `APP_AUTH_ROLE`, `APP_AUTH_OFFICE_NAME`, `APP_AUTH_ALLOWED_TAMBONS`, `APP_AUTH_ALLOWED_APPROVERS`, `APP_AUTH_CAN_SUBMIT=0` แล้ว Save/rebuild/deploy
+- ผล: **Deploy live for `313a3f8`**; `/api/health` ok; `/api/access/status` ตอบ `auth_required:true` + CSRF (ยังไม่ login)
+- ขั้นตอนถัดไป: login ด้วยบัญชีแอปบน `https://tv-automation.onrender.com` แล้วค่อย smoke `dry_run` (ยังห้าม Draft/Submit)
+
 ## 31. Cursor handoff จาก Manus (2026-08-16)
 
 - Local workspace ถูก `git pull` จาก `f05f509` → `e818d5f` (PR #4 squash merge: CSP Enforce + security hardening) ให้ตรงกับ `origin/main`
@@ -405,3 +435,14 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - คง `APP_AUTH_CAN_SUBMIT=0`; ห้าม Draft/Submit / portal mutation ระหว่างทดสอบ; ห้ามลด security guards เพื่อให้ deploy ผ่าน
 - Offline verification หลัง pull: `node --check` ของ `auth.js`/`app.js`/`csp-bindings.js`, `py_compile`, security headers/hardening/selector tests, และ `scripts/security_check.py` ผ่าน 14/14 (local ยังไม่มี auth secrets จึงมี warning `APP_AUTH_REQUIRED=1 but authentication secrets are not configured` และ `memory://` ซึ่งถูกต้องสำหรับ development)
 - งานถัดไป: ผู้ใช้ตั้ง Render Environment ตาม `docs/RENDER_PHASE1_CHECKLIST.md` → Save/Deploy → ตรวจ logs + `/api/health` + `/api/access/status` + login แอป → จากนั้นค่อย smoke `dry_run` และงาน a11y ใน branch แยก
+
+## 35. User-login T&V Session — ไม่ส่งรหัสผ่านผ่าน API (2026-08-16)
+
+- **สถาปัตยกรรมใหม่:** ผู้ใช้ Login T&V เองใน headed Chromium ที่เปิดผ่าน `POST /api/tv-browser/start`; Playwright ใช้ `launch_persistent_context` กับ profile ที่ `data/browser-profile/` (หรือ env `TV_BROWSER_PROFILE_DIR`) ซึ่ง **gitignored และห้าม copy/อัปโหลด** เพราะมี T&V session cookies
+- `app.py` เพิ่ม `TvBrowserSession` (Playwright objects ถูกจำกัดใน worker thread เดียว สื่อสารผ่าน command queue), `is_tv_logged_in(page)` (ตรวจ login form + auth markers ไม่ใช่ URL เดี่ยว), `_local_headed_available()` และ routes `POST /api/tv-browser/start`, `GET /api/tv-browser/status`, `POST /api/tv-browser/stop` (ทั้งหมดอยู่ใน protected API set + rate limit)
+- `/api/run` เปลี่ยนเป็น: ปฏิเสธ payload ที่มี `username`/`password` (400) → ตรวจ authorization profile → ตรวจ local headed availability (503 บน headless/Render) → ตรวจ `logged_in` (409 พร้อมข้อความ `TV_NOT_LOGGED_IN_ERROR`) → ส่ง job เข้า session thread. ระหว่างรันตรวจ `is_tv_logged_in` ทุกกลุ่มตำบล; ถ้า session หมดอายุ หยุดทันทีด้วย `TV_SESSION_EXPIRED_MESSAGE`. Dry-run ไม่ปิด browser (session คงอยู่)
+- Frontend: ตัดช่อง username/password และ Headless toggle ออกจาก `templates/index.html`; เพิ่ม status chip `T&V: Logged In ✓` + ปุ่ม `Login T&V (เปิดเบราว์เซอร์)` + `ตรวจสอบสถานะ`; ปุ่มเริ่ม Automation disabled จนกว่า `logged_in=true` (poll ทุก 4 วินาทีระหว่างรอ). `app.js` ล้าง legacy Web Storage keys ครั้งเดียวและไม่แตะ credential อีก
+- CLI `automate_submission.py`: ตัด `--username/--password`, `TV_USERNAME`/`TV_PASSWORD`, `getpass` ทั้งหมด; ใช้ persistent context เดียวกัน รอผู้ใช้ Login เองสูงสุด 5 นาที (`TV_LOGIN_TIMEOUT`)
+- Tests: `test_workflow26_hardening.py` เพิ่ม reject-credentials (400), require-logged-in (409), headless-server refusal (503), `is_tv_logged_in` heuristics และ context-manager `_run_route_test_env` ที่ปิด rate limiter ระหว่าง offline test; `test_selector2_readiness.py` ตรวจ lifecycle ของ `TvBrowserSession._worker` แทน browser.close เดิม; `test_security_headers.py` ยืนยันว่า frontend/template ไม่มี credential inputs และ backend/CLI ไม่ fill `USER_PASSWORD`
+- ผลตรวจ: hardening 9, security headers 8, Select2 4, user auth 4, fiscal year 5 ผ่านทั้งหมด; `scripts/security_check.py` 14/14; `py_compile` + `node --check` ผ่าน. ยังไม่มีการ Draft/Submit จริง
+- ข้อจำกัดโดยเจตนา: Render/headless ไม่สามารถรัน portal automation ได้อีกต่อไป (คงเฉพาะ app-auth, Excel/แผน, UI); ห้ามเพิ่ม API รับ cookie/token ของ T&V เพื่อ workaround

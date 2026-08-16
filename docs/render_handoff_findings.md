@@ -1,4 +1,10 @@
 
+## 2026-08-16 Render Phase 1 env + deploy live
+
+- Inspected Environment on Render (names only). Already present: `APP_ENV`, `APP_AUTH_REQUIRED`, `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD_HASH`, `APP_SESSION_SECRET`, `RATELIMIT_STORAGE_URI`.
+- Added missing authorization profile (non-secret): `APP_AUTH_ROLE=officer`, `APP_AUTH_OFFICE_NAME=สำนักงานเกษตรอำเภอสีดา`, `APP_AUTH_ALLOWED_TAMBONS=สามเมือง,สีดา,หนองตาดใหญ่,โนนประดู่,โพนทอง`, `APP_AUTH_ALLOWED_APPROVERS=นางอรอนงค์ สูญกลาง`, `APP_AUTH_CAN_SUBMIT=0`.
+- Saved via dashboard → **Deploy live for `313a3f8`** (docs PR #5 squash merge). Post-deploy: `/api/health` = ok, `/api/access/status` = `auth_required:true` with CSRF token (unauthenticated). No secrets written to git.
+
 ## 2026-08-16 Cursor workspace sync
 
 - Local workspace fast-forwarded `f05f509` → `e818d5f` to match `origin/main`.

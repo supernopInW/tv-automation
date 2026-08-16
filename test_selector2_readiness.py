@@ -49,10 +49,18 @@ def test_source_does_not_wait_for_hidden_select_visibility():
 
 
 def test_cleanup_is_not_after_context_teardown():
+    """The session worker must close its persistent context inside sync_playwright."""
     source = Path("app.py").read_text(encoding="utf-8")
-    assert "if browser.is_connected():" in source
-    assert "browser = None" in source
-    assert "Do not call browser.close() after its event loop is stopped." in source
+    worker_start = source.index("def _worker(self):")
+    worker_end = source.index("_tv_session = TvBrowserSession", worker_start)
+    worker_source = source[worker_start:worker_end]
+    # launch and close both happen inside the `with sync_playwright()` block,
+    # so no Playwright call can outlive its event loop.
+    launch_pos = worker_source.index("launch_persistent_context")
+    close_pos = worker_source.index("context.close()")
+    with_pos = worker_source.index("with sync_playwright() as p:")
+    assert with_pos < launch_pos < close_pos
+    assert "browser.close()" not in worker_source
 
 
 if __name__ == "__main__":
