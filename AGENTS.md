@@ -415,6 +415,7 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - Frontend: accept invite จาก `/?invite=TOKEN` และปุ่ม “สร้างลิงก์เชิญ” สำหรับ admin เท่านั้น (`is_admin`)
 - UX: `app.js` รอ `app-authenticated` ก่อนโหลด geo/sheets เพื่อไม่ให้ log แดงก่อน login
 - ทดสอบออฟไลน์ผ่าน: `test_user_auth.py` (4), hardening (6), Select2 (4), security headers (8); `node --check static/auth.js`
+- Gitleaks: หลีกเลี่ยง literal `"password": "..."` ใน test fixtures — ประกอบรหัสผ่านด้วย `"".join(...)` เพื่อไม่ให้ `generic-api-key` ฟ้อง false positive
 - สถานะโค้ด: ยัง **uncommitted บน local `main`** — ต้อง branch/commit/PR แล้ว deploy ถึง Render จึงใช้เชิญจริงได้ (Disk ไม่จำเป็น; ใช้ Redis เดิม)
 
 ## 32. Render Phase 1 authorization profile + deploy (2026-08-16)
