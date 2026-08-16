@@ -1,0 +1,6 @@
+# Reviewed false positives: synthetic test-only app-auth passwords in
+# test_user_auth.py fixtures, introduced by commit 280b3ff and already
+# rewritten at head (45bf7d3) to avoid literal password strings. The
+# historical commit remains in the PR range, so gitleaks still matches it.
+280b3fff1ba8c064100f8dbc6e26242ee0954e5e:test_user_auth.py:generic-api-key:90
+280b3fff1ba8c064100f8dbc6e26242ee0954e5e:test_user_auth.py:generic-api-key:104

@@ -1,113 +1,84 @@
 const fs = require('fs');
 const assert = require('assert');
 
+// The app no longer handles T&V credentials: the officer logs into T&V
+// manually in the Playwright browser and /api/run receives no username or
+// password. This suite verifies the one remaining cleanup duty (purging
+// legacy Web Storage keys from older versions) and guards the new
+// no-credential invariants in static/app.js.
 const source = fs.readFileSync('static/app.js', 'utf8');
-const sourceStart = source.indexOf('function clearTandVCredentials()');
-const sourceEnd = source.indexOf('\n}\n\ndocument.addEventListener("DOMContentLoaded"', sourceStart) + 2;
-if (sourceStart < 0 || sourceEnd <= sourceStart) {
-  throw new Error('credential cleanup functions not found');
+
+const sourceStart = source.indexOf('function clearLegacyTvCredentialStorage()');
+if (sourceStart < 0) {
+  throw new Error('legacy credential storage cleanup function not found');
+}
+const sourceEnd = source.indexOf('\n}', sourceStart) + 2;
+if (sourceEnd <= sourceStart) {
+  throw new Error('legacy credential storage cleanup function is malformed');
 }
 
-// Evaluate only the two pure cleanup functions from the production bundle.
+// Evaluate only the pure cleanup function from the production bundle.
 const cleanupSource = source.slice(sourceStart, sourceEnd);
 const realConsole = console;
 global.console = { warn: () => {}, log: realConsole.log.bind(realConsole) };
 eval(cleanupSource);
 
-function makeBrowserState() {
+// Legacy keys left behind by older app versions must all be removed.
+{
   const local = new Map([['tv_username', 'user']]);
   const session = new Map([
     ['tv_username', 'session-user'],
     ['tv_password', 'password-value'],
   ]);
-  const fields = {
-    username: { value: 'user' },
-    password: { value: 'password-value' },
-  };
-  let localRemovals = 0;
-  let sessionRemovals = 0;
+  global.localStorage = { removeItem: (key) => local.delete(key) };
+  global.sessionStorage = { removeItem: (key) => session.delete(key) };
 
-  global.localStorage = {
-    removeItem: (key) => {
-      localRemovals += 1;
-      local.delete(key);
-    },
-  };
-  global.sessionStorage = {
-    removeItem: (key) => {
-      sessionRemovals += 1;
-      session.delete(key);
-    },
-  };
-  global.document = {
-    getElementById: (id) => fields[id],
-  };
+  clearLegacyTvCredentialStorage();
 
-  return {
-    local,
-    session,
-    fields,
-    removalCounts: () => ({ local: localRemovals, session: sessionRemovals }),
-  };
+  assert.strictEqual(local.has('tv_username'), false, 'legacy local username must be removed');
+  assert.strictEqual(session.has('tv_username'), false, 'legacy session username must be removed');
+  assert.strictEqual(session.has('tv_password'), false, 'legacy session password must be removed');
 }
 
-function assertCredentialsCleared(state, message) {
-  assert.strictEqual(state.local.has('tv_username'), false, `${message}: local username`);
-  assert.strictEqual(state.session.has('tv_username'), false, `${message}: session username`);
-  assert.strictEqual(state.session.has('tv_password'), false, `${message}: session password`);
-  assert.strictEqual(state.fields.username.value, '', `${message}: username input`);
-  assert.strictEqual(state.fields.password.value, '', `${message}: password input`);
-}
-
-// Direct helper test: both browser storage locations and visible fields clear.
+// No-credential invariants: the frontend must never read T&V credential
+// inputs, persist credentials, or send them to /api/run.
 {
-  const state = makeBrowserState();
-  const clear = createRunCredentialCleanup();
-  clear();
-  clear(); // idempotency: the second signal must not repeat cleanup.
-  assertCredentialsCleared(state, 'direct cleanup');
-  assert.deepStrictEqual(state.removalCounts(), { local: 1, session: 2 });
+  assert.ok(
+    !source.includes("getElementById('username')"),
+    'frontend must not read a T&V username input',
+  );
+  assert.ok(
+    !source.includes("getElementById('password')"),
+    'frontend must not read a T&V password input',
+  );
+  assert.ok(
+    !source.includes("localStorage.setItem('tv_username'"),
+    'frontend must not persist a T&V username',
+  );
+  assert.ok(
+    !source.includes("sessionStorage.setItem('tv_password'"),
+    'frontend must not persist a T&V password',
+  );
+
+  const runCallStart = source.indexOf("fetch('/api/run'");
+  assert.ok(runCallStart >= 0, '/api/run call must exist');
+  const payloadStart = source.lastIndexOf('const payload = {', runCallStart);
+  assert.ok(payloadStart >= 0, '/api/run payload literal must exist');
+  const payloadEnd = source.indexOf('};', payloadStart);
+  const payloadSource = source.slice(payloadStart, payloadEnd);
+  assert.ok(!/\busername\s*:/.test(payloadSource), '/api/run payload must not contain a username field');
+  assert.ok(!/\bpassword\s*:/.test(payloadSource), '/api/run payload must not contain a password field');
 }
 
-// Simulate Playwright SSE success: reader returns done=true.
+// The user-driven T&V login session flow must be wired in.
 {
-  const state = makeBrowserState();
-  const clearRunCredentials = createRunCredentialCleanup();
-  const readerResult = { done: true, value: undefined };
-  if (readerResult.done) clearRunCredentials();
-  assertCredentialsCleared(state, 'Playwright success completion');
-}
-
-// Simulate Playwright SSE failure: reader rejects while processing the run.
-{
-  const state = makeBrowserState();
-  const clearRunCredentials = createRunCredentialCleanup();
-  Promise.reject(new Error('simulated stream failure')).catch(() => clearRunCredentials());
-  returnPromiseDrain().then(() => {
-    assertCredentialsCleared(state, 'Playwright error completion');
-    assertLifecycleWiring();
-    console.log('PASS credential cleanup unit tests: direct, success, error, idempotency');
-  });
-}
-
-function returnPromiseDrain() {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
-function assertLifecycleWiring() {
+  assert.ok(source.includes('/api/tv-browser/status'), 'frontend must poll T&V login status');
+  assert.ok(source.includes('/api/tv-browser/start'), 'frontend must open the T&V login browser');
   assert.match(
     source,
-    /if \(done\) \{[\s\S]*?clearRunCredentials\(\);/,
-    'success path must clear credentials when the SSE reader is done',
-  );
-  assert.match(
-    source,
-    /reader\.read\(\)\.then\([\s\S]*?\.catch\(err => \{[\s\S]*?clearRunCredentials\(\);/,
-    'stream error path must clear credentials',
-  );
-  assert.match(
-    source,
-    /fetch\('\/api\/run'[\s\S]*?\.catch\(err => \{[\s\S]*?clearRunCredentials\(\);/,
-    'request error path must clear credentials',
+    /startBtn\.disabled = !tvSessionState\.loggedIn/,
+    'Start button must stay disabled until T&V is logged in',
   );
 }
+
+console.log('PASS credential cleanup unit tests: legacy purge, no-credential payload, login gating');
