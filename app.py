@@ -2316,23 +2316,19 @@ def run_automation():
     global _run_active
     data = request.json or {}
     records = data.get('records', [])
-
-    # The API no longer handles T&V credentials in any form. Reject payloads
-    # that still carry them so old clients fail loudly instead of leaking.
-    if data.get('password') or data.get('username'):
-        return jsonify({
-            "success": False,
-            "error": "ระบบไม่รับชื่อผู้ใช้/รหัสผ่าน T&V ผ่าน API อีกต่อไป "
-                     "กรุณา Login T&V ในหน้าต่างเบราว์เซอร์ผ่านปุ่ม Login T&V แทน",
-        }), 400
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
 
     run_context, authorization_error = _validate_run_authorization(data)
     if authorization_error:
         error_body, error_status = authorization_error
         return jsonify(error_body), error_status
 
-    if not _local_headed_available():
-        return jsonify({"success": False, "error": TV_BROWSER_LOCAL_ONLY_ERROR}), 503
+    if not username or not password:
+        return jsonify({
+            "success": False,
+            "error": "กรุณากรอกชื่อผู้ใช้และรหัสผ่านบัญชี T&V ของท่านในเซสชันนี้",
+        }), 400
 
     sheet_name = data.get('sheet', 'มิ.ย.69')
     tambon = run_context['tambon']
@@ -2340,11 +2336,7 @@ def run_automation():
     office_name = run_context['office_name']
     approver = run_context['approver']
     mode = run_context['mode']
-
-    # Automation reuses the browser session the officer logged into manually.
-    tv_status = _tv_session.status()
-    if not tv_status.get('running') or not tv_status.get('logged_in'):
-        return jsonify({"success": False, "error": TV_NOT_LOGGED_IN_ERROR}), 409
+    headless = (not _local_headed_available()) or os.environ.get('HEADLESS', '0') == '1'
 
     if not _run_lock.acquire(blocking=False):
         return jsonify({
@@ -2365,97 +2357,109 @@ def run_automation():
         global _run_active
         q = queue.Queue()
 
-        def release_run_state():
+        def run_playwright():
             global _run_active
-            _run_active = False
-            try:
-                _run_lock.release()
-            except RuntimeError:
-                pass
-
-        def on_abort():
-            q.put({"type": "error", "message": "เบราว์เซอร์ T&V ถูกปิดก่อนเริ่มงาน — ยกเลิกการทำงาน"})
-            release_run_state()
-            q.put(None)
-
-        def run_job(page):
-            """Executed on the TV browser session thread with the logged-in page."""
+            from playwright.sync_api import sync_playwright
+            browser = None
+            portal_user = username
+            portal_pass = password
             try:
                 q.put({"type": "info", "message": f"พื้นที่: {office_name or '-'} | บทบาท: {role} | ตำบลที่จะกรอก: {len(groups)} กลุ่ม"})
-                q.put({"type": "info", "message": "ใช้ T&V Session ที่ท่าน Login ไว้ในเบราว์เซอร์ (ไม่ส่งรหัสผ่านผ่านระบบ)"})
-                if not is_tv_logged_in(page):
-                    raise RuntimeError("TV_SESSION_EXPIRED")
+                q.put({"type": "info", "message": "กำลังเข้าสู่ระบบ T&V ด้วยบัญชีในเซสชันของท่าน (ไม่บันทึกรหัสผ่าน)"})
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=headless)
+                    context = browser.new_context()
+                    page = context.new_page()
+                    page.set_default_timeout(PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.set_default_navigation_timeout(PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
 
-                for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
-                    q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
-                    page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                    page.goto(PORTAL_LOGIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                    page.wait_for_selector('input[name="USER_NAME"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.wait_for_selector('input[name="USER_PASSWORD"]', state='visible', timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.fill('input[name="USER_NAME"]', portal_user)
+                    page.fill('input[name="USER_PASSWORD"]', portal_pass)
+                    portal_pass = ''
+                    portal_user = ''
+                    page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(2_000)
                     if not is_tv_logged_in(page):
                         raise RuntimeError("TV_SESSION_EXPIRED")
-                    _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
 
-                    q.put({"type": "info", "message": f"เลือก ปีงบประมาณ {portal_year}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
-                    select_by_value_js(page, 'select#PL_YAER', portal_year)
-                    _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
-                    select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
-                    page.wait_for_timeout(700)
-                    select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
-                    page.wait_for_timeout(700)
+                    for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
+                        q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
+                        page.goto(PORTAL_WORKFLOW_26_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                        if not is_tv_logged_in(page):
+                            raise RuntimeError("TV_SESSION_EXPIRED")
+                        _wait_for_portal_ready(page, f"workflow_26 group {g_idx}")
 
-                    for idx, rec in indexed_recs:
+                        q.put({"type": "info", "message": f"เลือก ปีงบประมาณ {portal_year}, เดือน {month_name_thai}, ตำบล {tambon_name}"})
+                        select_by_value_js(page, 'select#PL_YAER', portal_year)
+                        _wait_for_select_options(page, 'select#PL_MOUNT', 2, 'after selecting fiscal year')
+                        select_by_label_js(page, 'select#PL_MOUNT', month_name_thai)
+                        page.wait_for_timeout(700)
+                        select_by_label_js(page, 'select#PL_TAMBONN', tambon_name)
+                        page.wait_for_timeout(700)
+
+                        for idx, rec in indexed_recs:
+                            try:
+                                _fill_record_row(page, rec, idx, q)
+                            except Exception as e_row:
+                                state = _page_diagnostics(page)
+                                if state.get("loginVisible"):
+                                    raise RuntimeError("TV_SESSION_EXPIRED") from e_row
+                                q.put({"type": "row_status", "index": idx, "status": "error",
+                                       "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
+                                try:
+                                    page.screenshot()
+                                    q.put({"type": "screenshot", "available": False,
+                                           "message": "ซ่อนภาพหน้าจอเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล"})
+                                    q.put({"type": "diagnostics", "index": idx, "details": state})
+                                except Exception as screenshot_exc:
+                                    q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {type(screenshot_exc).__name__}"})
+                                try:
+                                    if page.locator('#bizModal_402').is_visible():
+                                        page.keyboard.press('Escape')
+                                        page.wait_for_timeout(500)
+                                except Exception:
+                                    pass
+
+                        if approver:
+                            q.put({"type": "info", "message": f"กำลังเลือกผู้อนุมัติ: {approver}..."})
+                            _select_approver(page, approver)
+                            page.wait_for_timeout(800)
+
+                        _finish_plan(page, mode, q)
+
+                    if mode == 'dry_run' and not headless:
+                        q.put({"type": "info", "message": "Dry-run ครบทุกตำบล — เบราว์เซอร์จะเปิดค้างไว้ 3 นาทีเพื่อตรวจสอบ"})
+                        page.wait_for_timeout(180000)
+
+                    q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ!"})
+                    if browser is not None:
                         try:
-                            _fill_record_row(page, rec, idx, q)
-                        except Exception as e_row:
-                            state = _page_diagnostics(page)
-                            if state.get("loginVisible"):
-                                raise RuntimeError("TV_SESSION_EXPIRED") from e_row
-                            q.put({"type": "row_status", "index": idx, "status": "error",
-                                   "message": f"เกิดข้อผิดพลาดแถว {rec.get('id')}: {e_row}"})
-                            try:
-                                # Keep diagnostic screenshots transient and server-side only.
-                                # Never publish portal screenshots under /static.
-                                page.screenshot()
-                                q.put({"type": "screenshot", "available": False,
-                                       "message": "ซ่อนภาพหน้าจอเพื่อป้องกันข้อมูลจากพอร์ทัลรั่วไหล"})
-                                q.put({"type": "diagnostics", "index": idx, "details": state})
-                            except Exception as screenshot_exc:
-                                q.put({"type": "info", "message": f"แนบ diagnostics/screenshot ไม่สำเร็จ: {type(screenshot_exc).__name__}"})
-                            try:
-                                if page.locator('#bizModal_402').is_visible():
-                                    page.keyboard.press('Escape')
-                                    page.wait_for_timeout(500)
-                            except Exception:
-                                pass
-
-                    if approver:
-                        q.put({"type": "info", "message": f"กำลังเลือกผู้อนุมัติ: {approver}..."})
-                        _select_approver(page, approver)
-                        page.wait_for_timeout(800)
-
-                    _finish_plan(page, mode, q)
-
-                if mode == 'dry_run':
-                    q.put({"type": "info", "message": "Dry-run ครบทุกตำบล — เบราว์เซอร์ยังเปิดค้างไว้ ตรวจสอบผลได้ทันที"})
-
-                q.put({"type": "done", "message": "เสร็จสิ้นภารกิจ! (เบราว์เซอร์และ T&V Session ยังเปิดอยู่)"})
+                            if browser.is_connected():
+                                browser.close()
+                        except Exception as close_exc:
+                            q.put({"type": "info", "message": f"ปิดเบราว์เซอร์ไม่สมบูรณ์: {close_exc}"})
+                        finally:
+                            browser = None
             except Exception as ex:
                 if "TV_SESSION_EXPIRED" in str(ex) or "AUTH_OR_SESSION_ERROR" in str(ex):
                     q.put({"type": "error", "message": TV_SESSION_EXPIRED_MESSAGE})
                 else:
                     q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})
             finally:
-                release_run_state()
+                portal_pass = ''
+                browser = None
+                _run_active = False
+                try:
+                    _run_lock.release()
+                except RuntimeError:
+                    pass
                 q.put(None)
 
-        if not _tv_session.submit_run(run_job, on_abort):
-            release_run_state()
-
-            def rejected_stream():
-                yield "data: " + json.dumps(
-                    {"type": "error", "message": TV_NOT_LOGGED_IN_ERROR},
-                    ensure_ascii=False,
-                ) + "\n\n"
-            yield from rejected_stream()
-            return
+        t = threading.Thread(target=run_playwright)
+        t.start()
 
         try:
             while True:

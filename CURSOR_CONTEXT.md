@@ -188,7 +188,7 @@ GET read-only routes ไม่ต้องใช้ CSRF header แต่ POST/P
 
 Application login แยกจาก T&V login. `static/auth.js` สร้าง overlay สำหรับ login ของแอปและ inject CSRF header ให้ same-origin mutation requests.
 
-**T&V login เป็น user-driven session (ตั้งแต่ 2026-08-16):** `/api/run` ไม่รับ T&V username/password อีกต่อไป (payload ที่มี credential ถูกปฏิเสธ 400). ผู้ใช้กด `POST /api/tv-browser/start` เพื่อเปิด headed Chromium (persistent profile ที่ `data/browser-profile/` — gitignored, local เท่านั้น) แล้ว Login T&V เอง; `GET /api/tv-browser/status` ใช้ `is_tv_logged_in(page)` ตรวจจากเนื้อหา page (login form + auth markers ไม่ใช่ URL เดี่ยว ๆ) และ automation ใช้ session เดียวกันผ่าน `TvBrowserSession` (Playwright objects ถูกจำกัดใน worker thread เดียว). บน Render/headless `/api/run` และ `/api/tv-browser/*` ปฏิเสธพร้อมข้อความ local-only. ห้ามส่ง cookie/token ของ T&V กลับใน API response หรือเก็บบน Flask server
+**T&V credentials ผ่านแท็บ session (ตั้งแต่ 2026-08-19):** แต่ละคนกรอก username/password T&V ของตนเองในหน้าเว็บ เก็บเฉพาะ `sessionStorage` ของแท็บ (ห้าม localStorage / ไฟล์ / Redis). `/api/run` รับ credential ครั้งเดียวตอนเริ่มกรอก ใช้ล็อกอินพอร์ทัลแล้วทิ้งจาก RAM; บน Render ใช้ headless ได้เมื่อมีรหัสในเซสชัน. ห้ามส่ง cookie/token ของ T&V กลับใน API response
 
 ### 6.2 Server-side authorization profile
 
