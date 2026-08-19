@@ -251,9 +251,9 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert "localStorage.setItem('tv_username'" not in source
     assert "localStorage.getItem('tv_username'" not in source
     assert "localStorage.setItem('tv_password'" not in source
-    # Tab session (sessionStorage) is the allowed place to hold T&V credentials.
+    # Username may live in tab sessionStorage; password stays in the form field.
     assert "sessionStorage.setItem('tv_username'" in source
-    assert "sessionStorage.setItem('tv_password'" in source
+    assert "sessionStorage.setItem('tv_password'" not in source
     assert "getElementById('username')" in source
     assert "getElementById('password')" in source
     assert "page.fill('input[name=\"USER_PASSWORD\"]'" in backend_source

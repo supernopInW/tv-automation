@@ -16,8 +16,8 @@ assert.ok(
   'T&V username may live in tab sessionStorage',
 );
 assert.ok(
-  source.includes("sessionStorage.setItem('tv_password'"),
-  'T&V password may live in tab sessionStorage',
+  !source.includes("sessionStorage.setItem('tv_password'"),
+  'T&V password must not be written to sessionStorage',
 );
 assert.ok(
   !source.includes("localStorage.setItem('tv_username'"),
@@ -43,4 +43,4 @@ assert.match(
   'Start button must stay disabled until T&V credentials are in this tab session',
 );
 
-console.log('PASS credential session tests: tab sessionStorage only, payload includes T&V creds, start gating');
+console.log('PASS credential session tests: username in tab sessionStorage, password in form only, payload includes T&V creds, start gating');

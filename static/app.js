@@ -164,8 +164,9 @@ function getRandomFieldTargetCount() {
     return pool[randIdx];
 }
 
-// T&V username/password live only in this tab's sessionStorage — never
-// localStorage, files, or Redis. Closing the tab clears them.
+// T&V username may live in this tab's sessionStorage. The password stays in
+// the form field only — never sessionStorage/localStorage/files/Redis — so
+// CodeQL does not treat it as cleartext secret storage.
 function readTvSessionCredentials() {
     const usernameInput = document.getElementById('username');
     const passwordInput = document.getElementById('password');
@@ -176,29 +177,27 @@ function readTvSessionCredentials() {
 }
 
 function persistTvCredentialsToSession() {
-    const { username, password } = readTvSessionCredentials();
+    const { username } = readTvSessionCredentials();
     try {
         if (username) sessionStorage.setItem('tv_username', username);
         else sessionStorage.removeItem('tv_username');
-        if (password) sessionStorage.setItem('tv_password', password);
-        else sessionStorage.removeItem('tv_password');
+        sessionStorage.removeItem('tv_password');
+        localStorage.removeItem('tv_username');
     } catch (storageError) {
-        console.warn('ไม่สามารถเก็บรหัส T&V ไว้ในเซสชันของแท็บได้', storageError);
+        console.warn('ไม่สามารถอัปเดตเซสชันของแท็บได้', storageError);
     }
     updateTvCredentialSessionUI();
 }
 
 function loadTvCredentialsFromSession() {
     const usernameInput = document.getElementById('username');
-    const passwordInput = document.getElementById('password');
     try {
         localStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_password');
         const savedUser = sessionStorage.getItem('tv_username') || '';
-        const savedPass = sessionStorage.getItem('tv_password') || '';
         if (usernameInput) usernameInput.value = savedUser;
-        if (passwordInput) passwordInput.value = savedPass;
     } catch (storageError) {
-        console.warn('ไม่สามารถอ่านรหัส T&V จากเซสชันของแท็บได้', storageError);
+        console.warn('ไม่สามารถอ่านชื่อผู้ใช้ T&V จากเซสชันของแท็บได้', storageError);
     }
     updateTvCredentialSessionUI();
 }
@@ -241,7 +240,7 @@ function updateTvCredentialSessionUI() {
     if (hint) {
         hint.textContent = ready
             ? 'ใช้บัญชี T&V ของแท็บนี้เมื่อกดเริ่มกรอก — ปิดแท็บแล้วรหัสจะหาย'
-            : 'แต่ละคนกรอกบัญชี T&V ของตนเอง — เก็บเฉพาะในเซสชันของแท็บนี้ ไม่บันทึกลงไฟล์หรือฐานข้อมูล';
+            : 'แต่ละคนกรอกบัญชี T&V ของตนเอง — รหัสผ่านอยู่ในช่องนี้จนกว่าจะออกจากหน้า ไม่บันทึกลงไฟล์หรือฐานข้อมูล';
     }
     if (startBtn && startBtn.dataset.running !== '1') {
         startBtn.disabled = !ready;
