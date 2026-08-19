@@ -250,17 +250,13 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
         cli_source = handle.read()
     assert "localStorage.setItem('tv_username'" not in source
     assert "localStorage.getItem('tv_username'" not in source
+    assert "localStorage.setItem('tv_password'" not in source
+    # Username may live in tab sessionStorage; password stays in the form field.
+    assert "sessionStorage.setItem('tv_username'" in source
     assert "sessionStorage.setItem('tv_password'" not in source
-    assert "sessionStorage.getItem('tv_password'" not in source
-    # The frontend must never read or send T&V credentials to /api/run;
-    # the officer logs into T&V manually in the Playwright browser instead.
-    assert "getElementById('username')" not in source
-    assert "getElementById('password')" not in source
-    assert '/api/tv-browser/status' in source
-    assert '/api/tv-browser/start' in source
-    # The backend must never fill the portal login form on the user's behalf.
-    assert "page.fill('input[name=\"USER_PASSWORD\"]'" not in backend_source
-    assert "page.fill('input[name=\"USER_PASSWORD\"]'" not in cli_source
+    assert "getElementById('username')" in source
+    assert "getElementById('password')" in source
+    assert "page.fill('input[name=\"USER_PASSWORD\"]'" in backend_source
     assert 'TV_PASSWORD' not in cli_source
     assert 'getpass' not in cli_source
     with open('templates/index.html', encoding='utf-8') as handle:
@@ -272,9 +268,8 @@ def test_frontend_does_not_persist_credentials_or_public_screenshot_url():
     assert 'gemini' not in backend_source.lower()
     assert 'google-genai' not in requirements_source.lower()
     assert 'gemini' not in template_source.lower()
-    # No T&V credential inputs in the dashboard; only the login-status panel.
-    assert 'id="username"' not in template_source
-    assert 'id="password"' not in template_source
+    assert 'id="username"' in template_source
+    assert 'id="password"' in template_source
     assert 'id="tv-status-chip"' in template_source
     assert "localStorage.setItem('gemini_api_key'" not in source
     assert "localStorage.getItem('gemini_api_key'" not in source

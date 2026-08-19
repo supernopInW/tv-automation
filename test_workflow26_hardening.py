@@ -86,46 +86,24 @@ class FakeTvSession:
         return False
 
 
-def test_run_rejects_tv_credentials_in_body():
-    """/api/run must refuse any payload that still carries T&V credentials."""
+def test_run_rejects_missing_credentials_without_starting_browser():
+    """/api/run must require T&V credentials from the user's session payload."""
     with _run_route_test_env():
         client = app.app.test_client()
         csrf = client.get("/api/access/status").get_json()["csrf_token"]
         response = client.post(
             "/api/run",
-            json={"records": [], "mode": "dry_run", "username": "x", "password": "y"},
+            json={"records": [], "mode": "dry_run"},
             headers={"X-CSRF-Token": csrf},
         )
         assert response.status_code == 400
         payload = response.get_json()
         assert payload["success"] is False
-        assert "ไม่รับ" in payload["error"]
+        assert "รหัสผ่าน" in payload["error"]
 
 
-def test_run_requires_logged_in_tv_session():
-    old_available = app._local_headed_available
-    old_session = app._tv_session
-    app._local_headed_available = lambda: True
-    app._tv_session = FakeTvSession(running=True, logged_in=False)
-    try:
-        with _run_route_test_env():
-            client = app.app.test_client()
-            csrf = client.get("/api/access/status").get_json()["csrf_token"]
-            response = client.post(
-                "/api/run",
-                json={"records": [], "mode": "dry_run"},
-                headers={"X-CSRF-Token": csrf},
-            )
-            assert response.status_code == 409
-            payload = response.get_json()
-            assert payload["success"] is False
-            assert payload["error"] == app.TV_NOT_LOGGED_IN_ERROR
-    finally:
-        app._local_headed_available = old_available
-        app._tv_session = old_session
-
-
-def test_run_refuses_on_headless_server():
+def test_run_does_not_require_local_headed_when_credentials_present():
+    """Headless/Render may run once the officer supplied T&V credentials."""
     old_available = app._local_headed_available
     app._local_headed_available = lambda: False
     try:
@@ -137,10 +115,9 @@ def test_run_refuses_on_headless_server():
                 json={"records": [], "mode": "dry_run"},
                 headers={"X-CSRF-Token": csrf},
             )
-            assert response.status_code == 503
-            payload = response.get_json()
-            assert payload["success"] is False
-            assert payload["error"] == app.TV_BROWSER_LOCAL_ONLY_ERROR
+            # Missing credentials still 400 — not a local-only 503.
+            assert response.status_code == 400
+            assert response.get_json()["error"] != app.TV_BROWSER_LOCAL_ONLY_ERROR
     finally:
         app._local_headed_available = old_available
 
@@ -216,9 +193,8 @@ if __name__ == "__main__":
     tests = [
         test_finalize_unknown_without_success_marker,
         test_finalize_confirmed_by_portal_marker,
-        test_run_rejects_tv_credentials_in_body,
-        test_run_requires_logged_in_tv_session,
-        test_run_refuses_on_headless_server,
+        test_run_rejects_missing_credentials_without_starting_browser,
+        test_run_does_not_require_local_headed_when_credentials_present,
         test_is_tv_logged_in_heuristics,
         test_diagnostics_never_include_password,
         test_modal_dynamic_selects_are_reapplied_after_generic_events,

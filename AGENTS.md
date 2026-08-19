@@ -1,6 +1,6 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
-> **Last Updated:** 2026-08-16
+> **Last Updated:** 2026-08-19
 > **Version:** 1.1.0
 
 ---
@@ -116,7 +116,9 @@ tv_automation/
 
 5. **ความปลอดภัยรหัสผ่าน (Security Protocol):**
    - **ห้าม** บันทึก Username/Password ของ T&V ลงไฟล์, DB หรือ Log เด็ดขาด
-   - **ระบบไม่รับ T&V username/password ผ่าน API ใด ๆ อีกต่อไป** — ผู้ใช้ Login T&V เองใน headed Playwright browser (persistent profile ที่ `data/browser-profile/`, gitignored) แล้ว automation ใช้ session นั้นต่อ; `/api/run` ปฏิเสธ payload ที่มี credential ด้วย 400
+   - แต่ละคนกรอก T&V username/password **ของตนเอง** ในหน้าเว็บ — เก็บเฉพาะ **sessionStorage ของแท็บนั้น** (ปิดแท็บแล้วหาย) **ห้าม** localStorage / ไฟล์ / Redis / cookie Flask
+   - `/api/run` รับ credential จากช่องฟอร์มครั้งเดียวตอนเริ่มกรอก ใช้ล็อกอินพอร์ทัลแล้วทิ้งจากหน่วยความจำ ไม่เขียนลง log
+- ชื่อผู้ใช้ T&V อาจอยู่ใน `sessionStorage` ของแท็บ; **รหัสผ่านไม่อยู่ใน Web Storage** (อยู่ในช่องฟอร์มเท่านั้น) เพื่อไม่ให้เป็น cleartext secret storage
 
 ---
 
@@ -446,3 +448,25 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - Tests: `test_workflow26_hardening.py` เพิ่ม reject-credentials (400), require-logged-in (409), headless-server refusal (503), `is_tv_logged_in` heuristics และ context-manager `_run_route_test_env` ที่ปิด rate limiter ระหว่าง offline test; `test_selector2_readiness.py` ตรวจ lifecycle ของ `TvBrowserSession._worker` แทน browser.close เดิม; `test_security_headers.py` ยืนยันว่า frontend/template ไม่มี credential inputs และ backend/CLI ไม่ fill `USER_PASSWORD`
 - ผลตรวจ: hardening 9, security headers 8, Select2 4, user auth 4, fiscal year 5 ผ่านทั้งหมด; `scripts/security_check.py` 14/14; `py_compile` + `node --check` ผ่าน. ยังไม่มีการ Draft/Submit จริง
 - ข้อจำกัดโดยเจตนา: Render/headless ไม่สามารถรัน portal automation ได้อีกต่อไป (คงเฉพาะ app-auth, Excel/แผน, UI); ห้ามเพิ่ม API รับ cookie/token ของ T&V เพื่อ workaround
+
+## 38. เปิดใช้ออนไลน์ — กรอกรหัส T&V ผ่านเซสชันแท็บ (2026-08-19)
+
+- ผู้ใช้ขอให้ทุกคนใช้เว็บออนไลน์ได้ โดยกรอก username/password T&V ของตนเองในหน้าเว็บ
+- เก็บเฉพาะ `sessionStorage` ของแท็บ — ห้าม `localStorage` / ไฟล์ / Redis / cookie Flask
+- `/api/run` รับ credential ครั้งเดียวแล้ว Playwright กรอกฟอร์มล็อกอินพอร์ทัล (headless ได้บน Render)
+- ปุ่มเริ่มกรอกปลดล็อกเมื่อกรอกครบในเซสชัน; ป้ายสถานะ `T&V: รหัสอยู่ในเซสชันนี้ ✓`
+- ยังห้าม log รหัสผ่าน และ diagnostics ต้องไม่มี password
+
+## 37. คืนโหมด Login T&V เอง (ไม่กรอกรหัสในเว็บ) — 2026-08-19 — superseded by §38
+
+- ผู้ใช้ขอให้เลิกกรอกรหัส T&V ในหน้าเว็บ กลับมาใช้ **Login T&V (เปิดเบราว์เซอร์)** + session ของ Playwright แทน
+- ตัดช่อง username/password และ sessionStorage ออกจาก frontend; `/api/run` ปฏิเสธ payload ที่มี credential (400) และต้องมี `logged_in` จาก `/api/tv-browser/status` (409)
+- Automation รันผ่าน `TvBrowserSession.submit_run()` บนเครื่อง local headed เท่านั้น — Render ยังใช้ได้แค่ app-auth/Excel/แผน
+- ทดสอบ offline: hardening 9, security headers 8, `test_clear_credentials.js`, `node --check static/app.js` ผ่าน
+
+## 36. T&V password ผ่านแท็บ session สำหรับทุกคน (2026-08-19) — superseded by §37
+
+- ผู้ใช้ขอให้ทุกคนกรอกรหัส T&V ผ่าน session ของตนเอง (รองรับคนที่ได้ลิงก์เว็บ) จึงคืนช่อง username/password ในหน้าเว็บ
+- เก็บเฉพาะ `sessionStorage` ของแท็บ — ห้าม `localStorage` / ไฟล์ / Redis / cookie Flask; `/api/run` รับ credential ครั้งเดียวแล้ว Playwright กรอกฟอร์มล็อกอินพอร์ทัล (headless ได้บน Render)
+- ปุ่มเริ่มกรอกปลดล็อกเมื่อกรอกครบในเซสชัน; ป้ายสถานะ `T&V: รหัสอยู่ในเซสชันนี้ ✓`
+- ยังห้าม log รหัสผ่าน และ diagnostics ต้องไม่มี password

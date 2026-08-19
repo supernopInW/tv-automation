@@ -461,18 +461,28 @@
         
         <div class="tv-session-panel" id="tv-session-panel">
             <div class="tv-session-info">
-                <span id="tv-status-chip" class="tv-status-chip tv-status-unknown">T&V: กำลังตรวจสอบ...</span>
+                <span id="tv-status-chip" class="tv-status-chip tv-status-offline">T&V: ยังไม่ได้กรอกรหัสในเซสชัน</span>
                 <span class="field-hint" id="tv-status-hint">
-                    Login T&V ด้วยบัญชีของท่านเองในหน้าต่างเบราว์เซอร์ — ระบบนี้ไม่รับและไม่เก็บรหัสผ่าน T&V
+                    แต่ละคนกรอกบัญชี T&amp;V ของตนเอง — เก็บเฉพาะในเซสชันของแท็บนี้ (ปิดแท็บแล้วรหัสหาย) ไม่บันทึกลงไฟล์หรือฐานข้อมูล
                 </span>
-            </div>
-            <div class="tv-session-actions">
-                <button id="tv-login-btn" class="btn-secondary" type="button">🔐 Login T&V (เปิดเบราว์เซอร์)</button>
-                <button id="tv-refresh-btn" class="btn-secondary" type="button">🔄 ตรวจสอบสถานะ</button>
             </div>
         </div>
 
         <div class="form-grid">
+            <div class="form-control-wrapper">
+                <label for="username">ชื่อผู้ใช้งาน T&amp;V (รหัสบัตรประชาชน)</label>
+                <input type="text" id="username" class="form-input" value="" placeholder="บัญชี T&amp;V ของท่านเอง" autocomplete="username">
+                <span id="username-error" class="validation-msg"></span>
+                <span class="field-hint">ใช้บัญชีของท่านเอง — เก็บในเซสชันของแท็บนี้เท่านั้น</span>
+            </div>
+
+            <div class="form-control-wrapper">
+                <label for="password">รหัสผ่านบัญชี T&amp;V ของท่าน</label>
+                <input type="password" id="password" class="form-input" value="" placeholder="รหัสผ่านของท่านเอง (ไม่แชร์)" autocomplete="current-password">
+                <span id="password-error" class="validation-msg"></span>
+                <span class="field-hint">อยู่ในช่องนี้จนกว่าจะออกจากหน้า — ไม่เขียนลงเครื่องถาวร</span>
+            </div>
+
             <div class="form-control-wrapper">
                 <label for="sheet-select">แผ่นงาน (เดือนแผนงาน)</label>
                 <select id="sheet-select" class="form-input" data-csp-change="onSheetChange">
@@ -514,7 +524,7 @@
                 </div>
             </div>
             
-            <button id="start-btn" class="btn-glow" disabled title="ต้อง Login T&V ก่อนเริ่ม Automation">
+            <button id="start-btn" class="btn-glow" disabled title="กรอกชื่อผู้ใช้และรหัสผ่าน T&amp;V ในเซสชันนี้ก่อน">
                 ⚡ เริ่มกรอกข้อมูลเข้าระบบ T&V
             </button>
         </div>
@@ -648,7 +658,7 @@
                     <div class="manual-step-num">4</div>
                     <div class="manual-step-content">
                         <h4>ขั้นที่ 4: ตั้งค่าบัญชี T&V และกดเริ่มกรอก</h4>
-                        <p>กด <strong>「Login T&V (เปิดเบราว์เซอร์)」</strong> แล้ว Login ด้วยบัญชี T&V ของคุณเองในหน้าต่างที่เปิดขึ้น (ระบบไม่รับและไม่เก็บรหัสผ่าน) เลือกผู้อนุมัติ เลือกโหมด (แนะนำ <strong>Dry-run</strong> ในครั้งแรกเพื่อทดสอบ) แล้วกด <strong>「เริ่มกรอกข้อมูลเข้าระบบ T&V」</strong></p>
+                        <p>กรอก <strong>ชื่อผู้ใช้และรหัสผ่าน T&amp;V ของคุณเอง</strong> (เก็บเฉพาะเซสชันของแท็บนี้) เลือกผู้อนุมัติ เลือกโหมด (แนะนำ <strong>Dry-run</strong> ในครั้งแรกเพื่อทดสอบ) แล้วกด <strong>「เริ่มกรอกข้อมูลเข้าระบบ T&V」</strong></p>
                     </div>
                 </div>
 
@@ -698,7 +708,7 @@
 
     <script src="/static/auth.js?v=invite-redis2"></script>
     <script src="/static/csp-bindings.js?v=csp1"></script>
-    <script src="/static/app.js?v=tvlogin1"></script>
+    <script src="/static/app.js?v=tvsess3"></script>
 
 </body>
 </html>

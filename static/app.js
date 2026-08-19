@@ -164,110 +164,88 @@ function getRandomFieldTargetCount() {
     return pool[randIdx];
 }
 
-// The app never handles T&V credentials anymore: the officer logs into T&V
-// manually in a Playwright-controlled browser and automation reuses that
-// session. Clear any credential keys left behind by older versions once.
-function clearLegacyTvCredentialStorage() {
+// T&V username may live in this tab's sessionStorage. The password stays in
+// the form field only — never sessionStorage/localStorage/files/Redis — so
+// CodeQL does not treat it as cleartext secret storage.
+function readTvSessionCredentials() {
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    return {
+        username: (usernameInput && usernameInput.value ? usernameInput.value : '').trim(),
+        password: passwordInput && passwordInput.value ? passwordInput.value : '',
+    };
+}
+
+function persistTvCredentialsToSession() {
+    const { username } = readTvSessionCredentials();
+    try {
+        if (username) sessionStorage.setItem('tv_username', username);
+        else sessionStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_password');
+        localStorage.removeItem('tv_username');
+    } catch (storageError) {
+        console.warn('ไม่สามารถอัปเดตเซสชันของแท็บได้', storageError);
+    }
+    updateTvCredentialSessionUI();
+}
+
+function loadTvCredentialsFromSession() {
+    const usernameInput = document.getElementById('username');
+    try {
+        localStorage.removeItem('tv_username');
+        sessionStorage.removeItem('tv_password');
+        const savedUser = sessionStorage.getItem('tv_username') || '';
+        if (usernameInput) usernameInput.value = savedUser;
+    } catch (storageError) {
+        console.warn('ไม่สามารถอ่านชื่อผู้ใช้ T&V จากเซสชันของแท็บได้', storageError);
+    }
+    updateTvCredentialSessionUI();
+}
+
+function clearTvCredentialsFromSession() {
     try {
         localStorage.removeItem('tv_username');
         sessionStorage.removeItem('tv_username');
         sessionStorage.removeItem('tv_password');
     } catch (storageError) {
-        console.warn('ไม่สามารถล้างข้อมูลรับรอง T&V เก่าจาก browser storage ได้', storageError);
+        console.warn('ไม่สามารถล้างรหัส T&V จากเซสชันได้', storageError);
     }
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.value = '';
+    if (passwordInput) passwordInput.value = '';
+    updateTvCredentialSessionUI();
 }
 
-/** State of the user-owned T&V browser session (polled from the backend). */
-const tvSessionState = {
-    available: true,
-    running: false,
-    loggedIn: false,
-    message: '',
-    pollTimer: null,
-};
+function hasTvSessionCredentials() {
+    const { username, password } = readTvSessionCredentials();
+    return Boolean(username && password);
+}
 
-/** Update the T&V status chip, hint, and Start button gating. */
-function updateTvSessionUI() {
+function updateTvCredentialSessionUI() {
     const chip = document.getElementById('tv-status-chip');
     const hint = document.getElementById('tv-status-hint');
-    const loginBtn = document.getElementById('tv-login-btn');
     const startBtn = document.getElementById('start-btn');
-    if (!chip) return;
-
-    chip.classList.remove('tv-status-unknown', 'tv-status-offline', 'tv-status-waiting', 'tv-status-ok');
-    if (!tvSessionState.available) {
-        chip.classList.add('tv-status-offline');
-        chip.textContent = 'T&V: ใช้ได้เฉพาะเครื่อง local';
-        if (loginBtn) loginBtn.disabled = true;
-    } else if (tvSessionState.loggedIn) {
-        chip.classList.add('tv-status-ok');
-        chip.textContent = 'T&V: Logged In ✓';
-        if (loginBtn) loginBtn.disabled = false;
-    } else if (tvSessionState.running) {
-        chip.classList.add('tv-status-waiting');
-        chip.textContent = 'T&V: รอการ Login ในหน้าต่างเบราว์เซอร์';
-        if (loginBtn) loginBtn.disabled = false;
-    } else {
-        chip.classList.add('tv-status-offline');
-        chip.textContent = 'T&V: ยังไม่ได้ Login';
-        if (loginBtn) loginBtn.disabled = false;
-    }
-    if (hint && tvSessionState.message) hint.textContent = tvSessionState.message;
-    if (startBtn) {
-        startBtn.disabled = !tvSessionState.loggedIn;
-        startBtn.title = tvSessionState.loggedIn ? '' : 'ต้อง Login T&V ก่อนเริ่ม Automation';
-    }
-}
-
-/** Fetch T&V browser/login status from the backend (no secrets in transit). */
-async function refreshTvSessionStatus() {
-    try {
-        const res = await fetch('/api/tv-browser/status');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        tvSessionState.available = data.available !== false;
-        tvSessionState.running = Boolean(data.running);
-        tvSessionState.loggedIn = Boolean(data.logged_in);
-        tvSessionState.message = data.message || '';
-    } catch (err) {
-        if (!isAppAuthGateError(err)) {
-            tvSessionState.running = false;
-            tvSessionState.loggedIn = false;
+    const ready = hasTvSessionCredentials();
+    if (chip) {
+        chip.classList.remove('tv-status-unknown', 'tv-status-offline', 'tv-status-waiting', 'tv-status-ok');
+        if (ready) {
+            chip.classList.add('tv-status-ok');
+            chip.textContent = 'T&V: รหัสอยู่ในเซสชันนี้ ✓';
+        } else {
+            chip.classList.add('tv-status-offline');
+            chip.textContent = 'T&V: ยังไม่ได้กรอกรหัสในเซสชัน';
         }
     }
-    updateTvSessionUI();
-}
-
-/** Open the headed browser so the user can log into T&V manually. */
-async function startTvBrowserLogin() {
-    const loginBtn = document.getElementById('tv-login-btn');
-    if (loginBtn) loginBtn.disabled = true;
-    try {
-        const res = await fetch('/api/tv-browser/start', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || data.success === false) {
-            throw new Error(data.error || `HTTP ${res.status}`);
-        }
-        addLog('info', data.message || 'เปิดเบราว์เซอร์แล้ว กรุณา Login T&V ด้วยบัญชีของท่าน');
-        startTvStatusPolling();
-    } catch (err) {
-        addLog('error', `เปิดเบราว์เซอร์ Login T&V ไม่สำเร็จ: ${err.message || err}`);
-    } finally {
-        if (loginBtn) loginBtn.disabled = false;
-        refreshTvSessionStatus();
+    if (hint) {
+        hint.textContent = ready
+            ? 'ใช้บัญชี T&V ของแท็บนี้เมื่อกดเริ่มกรอก — ปิดแท็บแล้วรหัสจะหาย'
+            : 'แต่ละคนกรอกบัญชี T&V ของตนเอง — รหัสผ่านอยู่ในช่องนี้จนกว่าจะออกจากหน้า ไม่บันทึกลงไฟล์หรือฐานข้อมูล';
     }
-}
-
-/** Poll login status every few seconds while waiting for the user to log in. */
-function startTvStatusPolling() {
-    if (tvSessionState.pollTimer) return;
-    tvSessionState.pollTimer = setInterval(async () => {
-        await refreshTvSessionStatus();
-        if (tvSessionState.loggedIn || !tvSessionState.available) {
-            clearInterval(tvSessionState.pollTimer);
-            tvSessionState.pollTimer = null;
-        }
-    }, 4000);
+    if (startBtn && startBtn.dataset.running !== '1') {
+        startBtn.disabled = !ready;
+        startBtn.title = ready ? '' : 'กรอกชื่อผู้ใช้และรหัสผ่าน T&V ในเซสชันนี้ก่อน';
+    }
 }
 
 /**
@@ -303,7 +281,6 @@ document.addEventListener("DOMContentLoaded", () => {
         .then(() => {
             initGeoCascade();
             fetchSheets();
-            refreshTvSessionStatus();
         })
         .catch((err) => {
             if (isAppAuthGateError(err)) return;
@@ -323,12 +300,12 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.setItem('tv_approver', e.target.value.trim());
     });
 
-    // T&V credentials are never handled by this app; purge legacy stored keys.
-    clearLegacyTvCredentialStorage();
-    const tvLoginBtn = document.getElementById('tv-login-btn');
-    if (tvLoginBtn) tvLoginBtn.addEventListener('click', startTvBrowserLogin);
-    const tvRefreshBtn = document.getElementById('tv-refresh-btn');
-    if (tvRefreshBtn) tvRefreshBtn.addEventListener('click', refreshTvSessionStatus);
+    // T&V credentials stay in this tab's sessionStorage only (never localStorage).
+    loadTvCredentialsFromSession();
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (usernameInput) usernameInput.addEventListener('input', persistTvCredentialsToSession);
+    if (passwordInput) passwordInput.addEventListener('input', persistTvCredentialsToSession);
 
     const savedRole = localStorage.getItem('tv_role') || 'officer';
     document.getElementById('role-select').value = savedRole;
@@ -3259,6 +3236,7 @@ function collectBaseRunRecords() {
 }
 
 function startAutomation() {
+    const { username, password } = readTvSessionCredentials();
     const approverVal = document.getElementById('approver').value.trim();
     const tambonVal = document.getElementById('tambon').value.trim();
 
@@ -3266,8 +3244,16 @@ function startAutomation() {
     document.querySelectorAll('.input-error').forEach(el => el.classList.remove('input-error'));
     document.querySelectorAll('.validation-msg').forEach(el => el.classList.remove('visible'));
 
-    if (!tvSessionState.loggedIn) {
-        addLog('error', 'T&V ยังไม่ได้เข้าสู่ระบบ — กดปุ่ม «Login T&V (เปิดเบราว์เซอร์)» แล้ว Login ด้วยบัญชีของท่านก่อน');
+    if (!username) {
+        document.getElementById('username').classList.add('input-error');
+        const msg = document.getElementById('username-error');
+        if (msg) { msg.textContent = 'กรุณากรอกชื่อผู้ใช้งานบัญชี T&V ของท่าน'; msg.classList.add('visible'); }
+        hasError = true;
+    }
+    if (!password) {
+        document.getElementById('password').classList.add('input-error');
+        const msg = document.getElementById('password-error');
+        if (msg) { msg.textContent = 'กรุณากรอกรหัสผ่านบัญชี T&V ของท่าน'; msg.classList.add('visible'); }
         hasError = true;
     }
     if (!approverVal) {
@@ -3319,6 +3305,7 @@ function executeAutomation() {
     let completionConfirmed = false;
 
     errorContainer.style.display = 'none';
+    startBtn.dataset.running = '1';
     startBtn.disabled = true;
     logStatus.textContent = 'RUNNING';
     logStatus.style.color = 'var(--warning)';
@@ -3328,8 +3315,10 @@ function executeAutomation() {
         addLog('error', built.needsExpandList
             ? 'มีแถวติ๊ก «ใช้ทุกตำบล» แต่ยังไม่มีรายการตำบล — กด «เลือกทุกตำบลในอำเภอ» ก่อน'
             : 'ไม่มีรายการที่จะรัน');
+        startBtn.dataset.running = '';
         startBtn.disabled = false;
         logStatus.textContent = 'IDLE';
+        updateTvCredentialSessionUI();
         return;
     }
 
@@ -3337,9 +3326,10 @@ function executeAutomation() {
     const runSheet = autoPlanMonth
         ? planMonthToSheetName(autoPlanMonth)
         : document.getElementById('sheet-select').value;
-    // No T&V credentials in the payload — automation reuses the browser
-    // session the officer logged into manually.
+    const tvCreds = readTvSessionCredentials();
     const payload = {
+        username: tvCreds.username,
+        password: tvCreds.password,
         sheet: runSheet,
         tambon: document.getElementById('tambon').value.trim() || (built.expandList[0] || ''),
         role: geoState.role,
@@ -3391,7 +3381,8 @@ function executeAutomation() {
         function processStream() {
             reader.read().then(({ done, value }) => {
                 if (done) {
-                    refreshTvSessionStatus();
+                    startBtn.dataset.running = '';
+                    updateTvCredentialSessionUI();
                     if (completionConfirmed) {
                         logStatus.textContent = 'FINISHED';
                         logStatus.style.color = 'var(--success)';
@@ -3418,7 +3409,8 @@ function executeAutomation() {
                 });
                 processStream();
             }).catch(err => {
-                refreshTvSessionStatus();
+                startBtn.dataset.running = '';
+                updateTvCredentialSessionUI();
                 addLog("error", `การอ่านผลการทำงานผิดพลาด: ${err.message || err}`);
                 logStatus.textContent = 'ERROR';
                 logStatus.style.color = 'var(--error)';
@@ -3427,7 +3419,8 @@ function executeAutomation() {
         processStream();
     })
     .catch(err => {
-        refreshTvSessionStatus();
+        startBtn.dataset.running = '';
+        updateTvCredentialSessionUI();
         addLog("error", `การรันผิดพลาด: ${err.message || err}`);
         logStatus.textContent = 'ERROR';
         logStatus.style.color = 'var(--error)';
