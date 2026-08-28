@@ -27,6 +27,7 @@
 | `APP_AUTH_ALLOWED_APPROVERS` | รายชื่อผู้อนุมัติคั่นด้วย comma | ตั้งแล้วบน live |
 | `APP_AUTH_CAN_SUBMIT` | `0` | คงไว้จนกว่าจะอนุมัติสิทธิ์ Submit |
 | `RATELIMIT_STORAGE_URI` | Redis/Valkey **Internal** URL จากเมนู Connect | ห้าม `memory://` และห้ามเว็บ URL ของแอป |
+| `RUN_RATE_LIMIT` | (ทางเลือก) เช่น `10 per hour` | default โค้ด = `10 per hour` สำหรับ `/api/run`; ปรับได้ตามขนาดทีม |
 | `APP_USER_REDIS_URI` | (ทางเลือก) Redis เดียวกันหรือ DB แยก | ถ้าไม่ตั้ง ใช้ `RATELIMIT_STORAGE_URI`; เก็บ users/invites (hashed) |
 
 ### สร้าง password hash (บนเครื่อง local)

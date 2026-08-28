@@ -51,8 +51,8 @@ def test_finalize_confirmed_by_portal_marker():
 class _run_route_test_env:
     """Disable app auth and the shared rate limiter for one offline test.
 
-    The /api/run limit (2 per 10 minutes) would otherwise reject the third
-    request in this suite before the code under test is reached.
+    The /api/run rate limit would otherwise reject repeated requests in this
+    suite before the code under test is reached.
     """
 
     def __enter__(self):
