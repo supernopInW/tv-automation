@@ -1,7 +1,7 @@
 # 🤖 Project Knowledge & AI Model Development Guidelines (AGENTS.md)
 > **DOAE T&V Automation System (ระบบกรอกแผนเยี่ยมเยียนอัตโนมัติ T&V)**  
-> **Last Updated:** 2026-08-19
-> **Version:** 1.1.0
+> **Last Updated:** 2026-08-28
+> **Version:** 1.1.1
 
 ---
 
@@ -50,6 +50,7 @@ tv_automation/
 ├── AGENTS.md                  # 👈 [ไฟล์นี้] คู่มือและบริบทสำหรับ AI Agents (ต้องอัปเดตเสมอ)
 ├── CURSOR_CONTEXT.md          # บริบทรวมสำหรับ Cursor (security, Render, a11y, workflow)
 ├── README.md                  # คู่มือโปรเจกต์ระดับผู้ใช้/ผู้พัฒนาทั่วไป
+├── Run_OCSC_AutoPilot.bat     # ⚡ ดับเบิ้ลคลิกเพื่อรันบอทเรียนและทำข้อสอบ OCSC ก.พ. อัตโนมัติ
 ├── app.py                     # 🧠 โค้ดหลัก Flask API, Playwright Automation Engine (Workflow 26), Map Activity logic
 ├── user_auth.py               # บัญชีแอปหลายคน + invite (Redis / memory://)
 ├── automate_submission.py     # สคริปต์ย่อยจัดการการกรอกข้อมูลอัตโนมัติด้วย Playwright
@@ -59,6 +60,15 @@ tv_automation/
 ├── docker-compose.yml         # 🚀 การสั่งรันด้วย Docker Compose แบบ 1-Command
 ├── Upload_To_GitHub.bat       # 🐙 สคริปต์ทางลัดสำหรับ Push โค้ดลง GitHub (supernopInW/tv-automation)
 │
+├── .agents/
+│   └── skills/
+│       └── doae-elearning/    # 🎓 Skill มาตรฐานสำหรับ AI ทำบทเรียน e-Learning & สอบ Post-test
+│           └── SKILL.md
+│
+├── skills/
+│   └── doae-elearning/        # 🎓 Skill สรุปกระบวนการ e-Learning สำหรับ AI Models
+│       └── SKILL.md
+│
 ├── config/
 │   └── districts.json         # พรีเซ็ตข้อมูลอำเภอ (เช่น อำเภอสีดา จ.นครราชสีมา)
 │
@@ -67,6 +77,7 @@ tv_automation/
 │   └── villages/              # ไฟล์ JSON รายชื่อหมู่บ้านแยกตามตำบล
 │
 ├── scripts/
+│   ├── ocsc_autopilot.py      # 🤖 สคริปต์ Playwright อัตโนมัติสำหรับ OCSC Learning Space (ก.พ.)
 │   ├── build_geo_data.py      # สคริปต์แปลง/สร้างฐานข้อมูลภูมิศาสตร์
 │   ├── merge_villages.py      # สคริปต์รวมรายชื่อหมู่บ้าน
 │   ├── create_sample_excel.py # สคริปต์สร้างไฟล์ Excel แผนงานตัวอย่างสำหรับทดสอบ
@@ -119,6 +130,14 @@ tv_automation/
    - แต่ละคนกรอก T&V username/password **ของตนเอง** ในหน้าเว็บ — เก็บเฉพาะ **sessionStorage ของแท็บนั้น** (ปิดแท็บแล้วหาย) **ห้าม** localStorage / ไฟล์ / Redis / cookie Flask
    - `/api/run` รับ credential จากช่องฟอร์มครั้งเดียวตอนเริ่มกรอก ใช้ล็อกอินพอร์ทัลแล้วทิ้งจากหน่วยความจำ ไม่เขียนลง log
 - ชื่อผู้ใช้ T&V อาจอยู่ใน `sessionStorage` ของแท็บ; **รหัสผ่านไม่อยู่ใน Web Storage** (อยู่ในช่องฟอร์มเท่านั้น) เพื่อไม่ให้เป็น cleartext secret storage
+
+6. **กฎความปลอดภัยและกลยุทธ์การทำข้อสอบ e-Learning (Moodle Quiz Protocol & Retrieval Strategy):**
+   - ในระบบ e-Learning ระบบอนุญาตให้ทำข้อสอบหลังเรียน (Post-test) ได้สูงสุด 5 ครั้ง
+   - **กลยุทธ์การหาคำตอบเมื่อสอบไม่ผ่าน:**
+     - **รอบที่ 1:** ใช้ความรู้และตรรกะทางวิชาการจำแนกคำตอบ
+     - **หากไม่ผ่านครั้งที่ 1 (รอบที่ 2):** ให้ไปสืบค้นเนื้อหา/แกะรอยจาก **วิดีโอ YouTube ของบทเรียนนั้นๆ ใน e-Learning** เพื่อนำคำตอบที่ถูกต้องมาตอบ
+     - **หากยังไม่ผ่านครั้งที่ 2 (รอบที่ 3):** ให้ไปเปิดอ่าน/สกัดข้อมูลจาก **ไฟล์เอกสารประกอบการเรียน (PDF/Document)** ที่อยู่ในรายวิชานั้นๆ มาเทียบคำตอบ
+   - **กฎเหล็กหยุดทำงาน:** หากทำข้อสอบไม่ผ่านติดต่อกัน **3 ครั้ง** ให้หยุดการทำงานทันที และแจ้งเตือนให้ผู้ใช้เข้ามาทำต่อด้วยตนเอง ห้ามทำต่อจนครบโควตา 5 ครั้งเด็ดขาด เพื่อสำรอง 2 ครั้งที่เหลือไว้ให้ผู้ใช้ทำคะแนนผ่าน
 
 ---
 
@@ -470,3 +489,11 @@ Security checker และ regression coverage รอบล่าสุดผ่
 - เก็บเฉพาะ `sessionStorage` ของแท็บ — ห้าม `localStorage` / ไฟล์ / Redis / cookie Flask; `/api/run` รับ credential ครั้งเดียวแล้ว Playwright กรอกฟอร์มล็อกอินพอร์ทัล (headless ได้บน Render)
 - ปุ่มเริ่มกรอกปลดล็อกเมื่อกรอกครบในเซสชัน; ป้ายสถานะ `T&V: รหัสอยู่ในเซสชันนี้ ✓`
 - ยังห้าม log รหัสผ่าน และ diagnostics ต้องไม่มี password
+
+## 39. ปรับ Rate Limit `/api/run` สำหรับทีมอำเภอ (2026-08-28)
+
+- เดิม `/api/run` จำกัด `2 per 10 minutes` ต่อ IP — เหมาะกับ anti-abuse แต่ทำให้ทีมทดสอบ/ใช้งานจริงโดน HTTP 429 บ่อย
+- เปลี่ยนเป็น **`RUN_RATE_LIMIT` environment variable** (default โค้ด: `10 per hour`) ใช้กับ `@limiter.limit(RUN_RATE_LIMIT)` ใน `app.py`
+- บน Render สามารถ override ได้ เช่น `RUN_RATE_LIMIT=15 per hour` หรือ `5 per 10 minutes` โดยไม่ต้องแก้โค้ด
+- `static/app.js` แสดงข้อความไทยชัดขึ้นเมื่อได้ 429 (อ่าน `error`/`message` และ `Retry-After` header)
+- ยังคง `_run_lock` (รันพร้อมกันทีละ 1 งาน) และ rate limit อื่น (upload 5/10 นาที) ไว้ตามเดิม

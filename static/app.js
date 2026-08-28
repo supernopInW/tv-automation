@@ -3370,8 +3370,20 @@ function executeAutomation() {
             let errMsg = `HTTP ${response.status}`;
             try {
                 const j = await response.json();
-                errMsg = j.error || errMsg;
-            } catch (_) {}
+                errMsg = j.error || j.message || errMsg;
+                if (response.status === 429) {
+                    const retryAfter = response.headers.get('Retry-After');
+                    if (retryAfter) {
+                        errMsg = `รันเกินโควต้าแล้ว — ลองใหม่ใน ~${retryAfter} วินาที`;
+                    } else if (!j.error && !j.message) {
+                        errMsg = 'รันเกินโควต้าแล้ว — กรุณารอสักครู่แล้วลองใหม่';
+                    }
+                }
+            } catch (_) {
+                if (response.status === 429) {
+                    errMsg = 'รันเกินโควต้าแล้ว — กรุณารอสักครู่แล้วลองใหม่';
+                }
+            }
             throw new Error(errMsg);
         }
         const reader = response.body.getReader();

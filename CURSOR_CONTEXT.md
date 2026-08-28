@@ -241,7 +241,7 @@ Docker ใช้ non-root `appuser`, `COPY --chown`, upload directory mode จ�
 | `POST /api/upload` | 5 ต่อ 10 นาที |
 | `POST /api/add-row` | 30 ต่อนาที |
 | `GET /api/records` | 30 ต่อนาที |
-| `POST /api/run` | 2 ต่อ 10 นาที |
+| `POST /api/run` | 10 ต่อชั่วโมง (ปรับได้ด้วย `RUN_RATE_LIMIT`) |
 
 Production ต้องใช้ `RATELIMIT_STORAGE_URI` เป็น Redis/Valkey Internal URL. ห้ามใช้ `memory://` เพราะ state ไม่แชร์ระหว่าง process/instance และหายเมื่อ restart
 

@@ -48,6 +48,8 @@ APP_AUTH_ALLOWED_APPROVERS = frozenset(
 APP_AUTH_CAN_SUBMIT = os.environ.get('APP_AUTH_CAN_SUBMIT', '0').strip().lower() in {'1', 'true', 'yes'}
 APP_ENV = os.environ.get('APP_ENV', 'development').strip().lower()
 RATE_LIMIT_STORAGE_URI = os.environ.get('RATELIMIT_STORAGE_URI', 'memory://').strip()
+# Team field use: default 10 automation runs/hour/IP (override via RUN_RATE_LIMIT on Render).
+RUN_RATE_LIMIT = os.environ.get('RUN_RATE_LIMIT', '10 per hour').strip() or '10 per hour'
 if APP_ENV in {'production', 'prod'} and RATE_LIMIT_STORAGE_URI.startswith('memory://'):
     raise RuntimeError('RATELIMIT_STORAGE_URI must be a shared Redis URI in production')
 if APP_ENV in {'production', 'prod'} and APP_AUTH_REQUIRED:
@@ -2311,7 +2313,7 @@ def tv_browser_stop():
 
 
 @app.route('/api/run', methods=['POST'])
-@limiter.limit('2 per 10 minutes', key_func=_rate_limit_key)
+@limiter.limit(RUN_RATE_LIMIT, key_func=_rate_limit_key)
 def run_automation():
     global _run_active
     data = request.json or {}
