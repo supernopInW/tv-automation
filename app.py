@@ -455,6 +455,66 @@ def is_tv_logged_in(page):
     return bool(state.get('authMarkers'))
 
 
+# Keep this check aligned with is_tv_logged_in(); wait_for_function needs a
+# boolean, while the Python helper returns structured state for tests.
+_TV_LOGGED_IN_CHECK_JS = """() => {
+    const urlPath = window.location.pathname || '';
+    const loginVisible = Boolean(document.querySelector('input[name="USER_PASSWORD"]'));
+    const authMarkers = Boolean(
+        document.querySelector('a[href*="logout"]')
+        || document.querySelector('a[href*="workflow"]')
+        || document.querySelector('#PL_YAER')
+        || document.querySelector('a[href*="main_tv_system"]')
+    );
+    const path = String(urlPath).toLowerCase();
+    if (loginVisible) return false;
+    if (!path || path === 'blank' || path.includes('login')) return false;
+    return Boolean(authMarkers);
+}"""
+
+
+def _login_failure_code(page, alert_text=None):
+    """Classify a failed login wait without logging portal PII or credentials."""
+    state = _page_diagnostics(page)
+    path = str(state.get('urlPath') or state.get('url') or '').lower()
+    if alert_text or state.get('loginVisible') or 'login' in path:
+        return 'TV_LOGIN_FAILED'
+    return 'TV_SESSION_EXPIRED'
+
+
+def _wait_until_tv_logged_in(page, timeout_ms=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS):
+    """Wait for authenticated portal chrome after submitting the login form."""
+    alert_text = []
+
+    def _on_dialog(dialog):
+        try:
+            message = (dialog.message or '').strip()
+            if message:
+                alert_text.append(True)
+            dialog.accept()
+        except Exception:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
+
+    try:
+        page.on('dialog', _on_dialog)
+    except Exception:
+        pass
+    try:
+        page.wait_for_function(_TV_LOGGED_IN_CHECK_JS, timeout=timeout_ms)
+    except Exception as exc:
+        raise RuntimeError(_login_failure_code(page, alert_text)) from exc
+    finally:
+        try:
+            page.remove_listener('dialog', _on_dialog)
+        except Exception:
+            pass
+    if not is_tv_logged_in(page):
+        raise RuntimeError(_login_failure_code(page, alert_text))
+
+
 class TvBrowserSession:
     """Owns one headed persistent Playwright context on a dedicated thread.
 
@@ -2258,6 +2318,10 @@ TV_BROWSER_LOCAL_ONLY_ERROR = (
     "— ไม่รองรับบนเซิร์ฟเวอร์ headless เช่น Render"
 )
 TV_NOT_LOGGED_IN_ERROR = "T&V ยังไม่ได้เข้าสู่ระบบ กรุณา Login T&V ก่อนเริ่ม Automation"
+TV_LOGIN_FAILED_MESSAGE = (
+    "เข้าสู่ระบบ T&V ไม่สำเร็จ — ตรวจชื่อผู้ใช้และรหัสผ่านในช่องของแอป "
+    "แล้วดูหน้าต่างเบราว์เซอร์ว่าพอร์ทัลมีข้อความเตือนหรือไม่ จากนั้นเริ่ม Dry-run อีกครั้ง"
+)
 TV_SESSION_EXPIRED_MESSAGE = (
     "T&V Session หมดอายุหรือถูกออกจากระบบ — หยุดการทำงานแล้ว "
     "กรุณา Login T&V ใหม่ในหน้าต่างเบราว์เซอร์ แล้วเริ่ม Automation อีกครั้ง"
@@ -2383,9 +2447,7 @@ def run_automation():
                     portal_pass = ''
                     portal_user = ''
                     page.locator('#login_submit').click(timeout=PLAYWRIGHT_ACTION_TIMEOUT_MS)
-                    page.wait_for_timeout(2_000)
-                    if not is_tv_logged_in(page):
-                        raise RuntimeError("TV_SESSION_EXPIRED")
+                    _wait_until_tv_logged_in(page)
 
                     for g_idx, (tambon_name, indexed_recs) in enumerate(groups, 1):
                         q.put({"type": "info", "message": f"[{g_idx}/{len(groups)}] เปิด Workflow 26 สำหรับตำบล: {tambon_name}"})
@@ -2446,7 +2508,10 @@ def run_automation():
                         finally:
                             browser = None
             except Exception as ex:
-                if "TV_SESSION_EXPIRED" in str(ex) or "AUTH_OR_SESSION_ERROR" in str(ex):
+                ex_text = str(ex)
+                if "TV_LOGIN_FAILED" in ex_text:
+                    q.put({"type": "error", "message": TV_LOGIN_FAILED_MESSAGE})
+                elif "TV_SESSION_EXPIRED" in ex_text or "AUTH_OR_SESSION_ERROR" in ex_text:
                     q.put({"type": "error", "message": TV_SESSION_EXPIRED_MESSAGE})
                 else:
                     q.put({"type": "error", "message": f"การกรอกข้อมูลหยุดชะงัก: {str(ex)}"})

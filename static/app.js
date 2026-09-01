@@ -3413,6 +3413,11 @@ function executeAutomation() {
                         try {
                             const data = JSON.parse(line.slice(6));
                             if (data.type === 'done') completionConfirmed = true;
+                            if (data.type === 'error') {
+                                completionConfirmed = true;
+                                logStatus.textContent = 'ERROR';
+                                logStatus.style.color = 'var(--error)';
+                            }
                             handleSSEMessage(data, payload.records.length, uiIndexMap);
                         } catch (e) {
                             console.error(e);
