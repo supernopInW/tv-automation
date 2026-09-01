@@ -158,6 +158,54 @@ def test_is_tv_logged_in_heuristics():
     assert app.is_tv_logged_in(BrokenPage()) is False
 
 
+def test_login_failure_code_distinguishes_login_page_from_expired_session():
+    login_page = FakePage({
+        "url": "https://tandv.doae.go.th/index/login_tv_system.php",
+        "urlPath": "/index/login_tv_system.php",
+        "loginVisible": True,
+    })
+    assert app._login_failure_code(login_page) == "TV_LOGIN_FAILED"
+
+    expired_page = FakePage({
+        "url": "https://tandv.doae.go.th/workflow/workflow_start.php?W=26",
+        "urlPath": "/workflow/workflow_start.php",
+        "loginVisible": False,
+    })
+    assert app._login_failure_code(expired_page) == "TV_SESSION_EXPIRED"
+
+
+def test_wait_until_tv_logged_in_classifies_stuck_login_form():
+    class LoginPage(FakePage):
+        def on(self, *args, **kwargs):
+            return None
+
+        def remove_listener(self, *args, **kwargs):
+            return None
+
+        def wait_for_function(self, *args, **kwargs):
+            raise TimeoutError("timeout")
+
+    page = LoginPage({
+        "url": "https://tandv.doae.go.th/index/login_tv_system.php",
+        "urlPath": "/index/login_tv_system.php",
+        "loginVisible": True,
+        "authMarkers": False,
+    })
+    try:
+        app._wait_until_tv_logged_in(page, timeout_ms=1)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "TV_LOGIN_FAILED" in str(exc)
+
+
+def test_run_waits_for_login_instead_of_fixed_delay():
+    source = Path("app.py").read_text(encoding="utf-8")
+    login_pos = source.index("page.locator('#login_submit').click")
+    next_chunk = source[login_pos:login_pos + 250]
+    assert "_wait_until_tv_logged_in(page)" in next_chunk
+    assert "wait_for_timeout(2_000)" not in next_chunk
+
+
 def test_diagnostics_never_include_password():
     page = FakePage({"url": "https://tandv.doae.go.th/index/login_tv_system.php", "bodyText": "login"})
     result = app._page_diagnostics(page)
@@ -196,6 +244,9 @@ if __name__ == "__main__":
         test_run_rejects_missing_credentials_without_starting_browser,
         test_run_does_not_require_local_headed_when_credentials_present,
         test_is_tv_logged_in_heuristics,
+        test_login_failure_code_distinguishes_login_page_from_expired_session,
+        test_wait_until_tv_logged_in_classifies_stuck_login_form,
+        test_run_waits_for_login_instead_of_fixed_delay,
         test_diagnostics_never_include_password,
         test_modal_dynamic_selects_are_reapplied_after_generic_events,
         test_modal_dates_are_set_after_generic_events_in_both_paths,
